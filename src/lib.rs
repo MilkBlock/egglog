@@ -247,7 +247,7 @@ impl FromStr for RunMode {
 
 #[derive(Clone)]
 pub struct EGraph {
-    backend: egglog_bridge::EGraph,
+    pub backend: egglog_bridge::EGraph,
     pub parser: Parser,
     names: check_shadowing::Names,
     /// pushed_egraph forms a linked list of pushed egraphs.
@@ -862,6 +862,8 @@ impl EGraph {
         let core_rule =
             rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
         let (query, actions) = (&core_rule.body, &core_rule.head);
+        // println!("canonicalized_core_rule:{:?}", core_rule);
+        // println!("canonicalized_core_rule_body:{:?}", core_rule.body);
 
         let rule_id = {
             let mut translator = BackendRule::new(
