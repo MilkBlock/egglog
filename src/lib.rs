@@ -534,6 +534,7 @@ impl EGraph {
                 .chain([&output])
                 .map(|sort| sort.column_ty(&self.backend))
                 .collect(),
+            // insert 一个 Row 的时候， 如果你是未插入 的 Row 那么会自动生成 UF value
             default: match decl.subtype {
                 FunctionSubtype::Constructor => DefaultVal::FreshId,
                 FunctionSubtype::Custom => DefaultVal::Fail,
@@ -632,7 +633,7 @@ impl EGraph {
     }
 
     pub fn print_function(&mut self, sym: &str, n: usize) -> Result<(), Error> {
-        log::info!("Printing up to {n} tuples of table {sym}: ");
+        tracing::info!("Printing up to {n} tuples of table {sym}: ");
         let (terms, outputs, termdag) = self.function_to_dag(sym, n, true)?;
         let f = self
             .functions
@@ -645,7 +646,7 @@ impl EGraph {
         let s = &mut buf;
         s.push_str("(\n");
         if terms.is_empty() {
-            log::info!("   (none)");
+            tracing::info!("   (none)");
         }
         for (term, output) in terms.iter().zip(&outputs.unwrap()) {
             let tuple_str = format!(
@@ -657,7 +658,7 @@ impl EGraph {
                     "".into()
                 },
             );
-            log::info!("{}", tuple_str);
+            tracing::info!("{}", tuple_str);
             s.push_str(&tuple_str);
             s.push('\n');
         }
@@ -673,7 +674,7 @@ impl EGraph {
                 .get(sym)
                 .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
             let size = self.backend.table_size(f.backend_id);
-            log::info!("Function {} has size {}", sym, size);
+            tracing::info!("Function {} has size {}", sym, size);
             self.print_msg(size.to_string());
             Ok(())
         } else {
@@ -688,7 +689,7 @@ impl EGraph {
             lens.sort_by_key(|(name, _)| name.as_str());
 
             for (sym, len) in &lens {
-                log::info!("Function {} has size {}", sym, len);
+                tracing::info!("Function {} has size {}", sym, len);
             }
 
             self.print_msg(
@@ -784,7 +785,7 @@ impl EGraph {
 
         if let Some(facts) = until {
             if self.check_facts(span, facts).is_ok() {
-                log::info!(
+                tracing::info!(
                     "Breaking early because of facts:\n {}!",
                     ListDisplay(facts, "\n")
                 );
@@ -795,7 +796,7 @@ impl EGraph {
         let subreport = self.step_rules(ruleset);
         report.union(subreport);
 
-        log::debug!("database size: {}", self.num_tuples());
+        tracing::debug!("database size: {}", self.num_tuples());
 
         report
     }
@@ -1069,23 +1070,23 @@ impl EGraph {
             ResolvedNCommand::SetOption { name, value } => {
                 let str = format!("Set option {} to {}", name, value);
                 self.set_option(&name, value);
-                log::info!("{}", str)
+                tracing::info!("{}", str)
             }
             // Sorts are already declared during typechecking
             ResolvedNCommand::Sort(_span, name, _presort_and_args) => {
-                log::info!("Declared sort {}.", name)
+                tracing::info!("Declared sort {}.", name)
             }
             ResolvedNCommand::Function(fdecl) => {
                 self.declare_function(&fdecl)?;
-                log::info!("Declared function {}.", fdecl.name)
+                tracing::info!("Declared function {}.", fdecl.name)
             }
             ResolvedNCommand::AddRuleset(_span, name) => {
                 self.add_ruleset(name.clone());
-                log::info!("Declared ruleset {name}.");
+                tracing::info!("Declared ruleset {name}.");
             }
             ResolvedNCommand::UnstableCombinedRuleset(_span, name, others) => {
                 self.add_combined_ruleset(name.clone(), others);
-                log::info!("Declared ruleset {name}.");
+                tracing::info!("Declared ruleset {name}.");
             }
             ResolvedNCommand::NormRule {
                 ruleset,
@@ -1093,22 +1094,22 @@ impl EGraph {
                 name,
             } => {
                 self.add_rule_with_name(name.clone(), rule, ruleset)?;
-                log::info!("Declared rule {name}.")
+                tracing::info!("Declared rule {name}.")
             }
             ResolvedNCommand::RunSchedule(sched) => {
                 let report = self.run_schedule(&sched);
-                log::info!("Ran schedule {}.", sched);
-                log::info!("Report: {}", report);
+                tracing::info!("Ran schedule {}.", sched);
+                tracing::info!("Report: {}", report);
                 self.overall_run_report.union(report.clone());
                 self.recent_run_report = Some(report);
             }
             ResolvedNCommand::PrintOverallStatistics => {
-                log::info!("Overall statistics:\n{}", self.overall_run_report);
+                tracing::info!("Overall statistics:\n{}", self.overall_run_report);
                 self.print_msg(format!("Overall statistics:\n{}", self.overall_run_report));
             }
             ResolvedNCommand::Check(span, facts) => {
                 self.check_facts(&span, &facts)?;
-                log::info!("Checked fact {:?}.", facts);
+                tracing::info!("Checked fact {:?}.", facts);
             }
             ResolvedNCommand::CoreAction(action) => match &action {
                 ResolvedAction::Let(_, name, contents) => {
@@ -1137,7 +1138,7 @@ impl EGraph {
                         // dont turn termdag into a string if we have messages disabled for performance reasons
                         if self.messages_enabled() {
                             let extracted = termdag.to_string(&term);
-                            log::info!("extracted with cost {cost}: {extracted}");
+                            tracing::info!("extracted with cost {cost}: {extracted}");
                             self.print_msg(extracted);
                         }
                         self.extract_report = Some(ExtractReport::Best {
@@ -1162,13 +1163,13 @@ impl EGraph {
                         .collect();
                     // Same as above, avoid turning termdag into a string if we have messages disabled for performance
                     if self.messages_enabled() {
-                        log::info!("extracted variants:");
+                        tracing::info!("extracted variants:");
                         let mut msg = String::default();
                         msg += "(\n";
                         assert!(!terms.is_empty());
                         for expr in &terms {
                             let str = termdag.to_string(expr);
-                            log::info!("   {str}");
+                            tracing::info!("   {str}");
                             msg += &format!("   {str}\n");
                         }
                         msg += ")";
@@ -1179,7 +1180,7 @@ impl EGraph {
             }
             ResolvedNCommand::Push(n) => {
                 (0..n).for_each(|_| self.push());
-                log::info!("Pushed {n} levels.")
+                tracing::info!("Pushed {n} levels.")
             }
             ResolvedNCommand::Pop(span, n) => {
                 for _ in 0..n {
@@ -1191,7 +1192,7 @@ impl EGraph {
                         }
                     })?;
                 }
-                log::info!("Popped {n} levels.")
+                tracing::info!("Popped {n} levels.")
             }
             ResolvedNCommand::PrintTable(span, f, n) => {
                 self.print_function(&f, n).map_err(|e| match e {
@@ -1214,7 +1215,7 @@ impl EGraph {
             ResolvedNCommand::Fail(span, c) => {
                 let result = self.run_command(*c);
                 if let Err(e) = result {
-                    log::info!("Command failed as expected: {e}");
+                    tracing::info!("Command failed as expected: {e}");
                 } else {
                     return Err(Error::ExpectFail(span));
                 }
@@ -1256,7 +1257,7 @@ impl EGraph {
                         .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 }
 
-                log::info!("Output to '{filename:?}'.")
+                tracing::info!("Output to '{filename:?}'.")
             }
             ResolvedNCommand::UserDefined(_span, name, exprs) => {
                 let command = self.commands.swap_remove(&name).unwrap_or_else(|| {
@@ -1296,7 +1297,7 @@ impl EGraph {
             }
         }
 
-        log::info!("Opening file '{:?}'...", filename);
+        tracing::info!("Opening file '{:?}'...", filename);
         let mut f = File::open(filename).unwrap();
         let mut contents = String::new();
         f.read_to_string(&mut contents).unwrap();
@@ -1309,7 +1310,7 @@ impl EGraph {
             row_schema.push(func.schema.output.clone());
         }
 
-        log::debug!("{:?}", row_schema);
+        tracing::debug!("{:?}", row_schema);
 
         let unit_val = self.backend.base_values().get(());
 
@@ -1358,7 +1359,7 @@ impl EGraph {
             parsed_contents.push(row);
         }
 
-        log::debug!("Successfully loaded file.");
+        tracing::debug!("Successfully loaded file.");
 
         let num_facts = parsed_contents.len();
 
@@ -1382,7 +1383,7 @@ impl EGraph {
 
         self.backend.flush_updates();
 
-        log::info!("Read {num_facts} facts into {func_name} from '{file}'.");
+        tracing::info!("Read {num_facts} facts into {func_name} from '{file}'.");
         Ok(())
     }
 
@@ -1438,7 +1439,7 @@ impl EGraph {
                 }
             }
         }
-        log::logger().flush();
+        // tracing::logger().flush();
 
         Ok(self.flush_msgs())
     }

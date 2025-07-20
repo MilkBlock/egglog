@@ -275,7 +275,7 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
     ) -> Option<C> {
         let mut ch_costs: Vec<C> = Vec::new();
         let sorts = &func.schema.input;
-        //log::debug!("compute_cost_hyperedge head {} sorts {:?}", head, sorts);
+        //tracing::debug!("compute_cost_hyperedge head {} sorts {:?}", head, sorts);
         // Relying on .zip to truncate the values
         for (value, sort) in row.vals.iter().zip(sorts.iter()) {
             if let Some(c) = self.compute_cost_node(egraph, *value, sort) {
@@ -347,7 +347,7 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
                 let target_sort = func.schema.output.clone();
 
                 let relax_hyperedge = |row: egglog_bridge::FunctionRow| {
-                    log::debug!("Relaxing a new hyperedge: {:?}", row);
+                    tracing::debug!("Relaxing a new hyperedge: {:?}", row);
                     if !row.subsumed {
                         let target = row.vals.last().unwrap();
                         let mut updated = false;
@@ -502,14 +502,14 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
     ) -> Option<(C, Term)> {
         match self.compute_cost_node(egraph, value, &sort) {
             Some(best_cost) => {
-                log::debug!("Best cost for the extract root: {:?}", best_cost);
+                tracing::debug!("Best cost for the extract root: {:?}", best_cost);
 
                 let term = self.reconstruct_termdag_node(egraph, termdag, value, &sort);
 
                 Some((best_cost, term))
             }
             None => {
-                log::error!("Unextractable root {:?} with sort {:?}", value, sort,);
+                tracing::error!("Unextractable root {:?} with sort {:?}", value, sort,);
                 None
             }
         }
@@ -596,7 +596,7 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
 
             res
         } else {
-            log::warn!("extracting multiple variants for containers or primitives is not implemented, returning a single variant.");
+            tracing::warn!("extracting multiple variants for containers or primitives is not implemented, returning a single variant.");
             if let Some(res) = self.extract_best_with_sort(egraph, termdag, value, sort) {
                 vec![res]
             } else {

@@ -127,11 +127,13 @@ pub(crate) fn desugar_command(
                 name = rule_name;
             }
 
-            vec![NCommand::NormRule {
+            let rule = vec![NCommand::NormRule {
                 ruleset,
                 name,
                 rule,
-            }]
+            }];
+            println!("rule is {:#?}", rule);
+            rule
         }
         Command::Sort(span, sort, option) => vec![NCommand::Sort(span, sort, option)],
         Command::AddRuleset(span, name) => vec![NCommand::AddRuleset(span, name)],
@@ -203,6 +205,7 @@ fn desugar_rewrite(
     subsume: bool,
     parser: &mut Parser,
 ) -> Vec<NCommand> {
+    panic!();
     let span = rewrite.span.clone();
     let var = parser.symbol_gen.fresh("rewrite_var__");
     let mut head = Actions::singleton(Action::Union(
@@ -228,7 +231,7 @@ fn desugar_rewrite(
     // make two rules- one to insert the rhs, and one to union
     // this way, the union rule can only be fired once,
     // which helps proofs not add too much info
-    vec![NCommand::NormRule {
+    let n_commands = vec![NCommand::NormRule {
         ruleset,
         name,
         rule: Rule {
@@ -243,7 +246,9 @@ fn desugar_rewrite(
             .collect(),
             head,
         },
-    }]
+    }];
+    tracing::info!("desugar rewrite into {:?}", n_commands);
+    n_commands
 }
 
 fn desugar_birewrite(

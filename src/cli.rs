@@ -49,12 +49,13 @@ pub mod bin {
 
     #[allow(clippy::disallowed_macros)]
     pub fn cli(mut egraph: EGraph) {
-        env_logger::Builder::new()
-            .filter_level(log::LevelFilter::Info)
-            .format_timestamp(None)
-            .format_target(false)
-            .parse_default_env()
-            .init();
+        // tracing_subscriber::fmt::init();
+        // env_logger::Builder::new()
+        //     .filter_level(tracing::LevelFilter::Info)
+        //     .format_timestamp(None)
+        //     .format_target(false)
+        //     .parse_default_env()
+        //     .init();
 
         let args = Args::parse();
         egraph.fact_directory.clone_from(&args.fact_directory);
@@ -65,11 +66,11 @@ pub mod bin {
         }
 
         if args.inputs.is_empty() {
-            log::info!("Welcome to Egglog REPL! (build: {})", env!("FULL_VERSION"));
+            tracing::info!("Welcome to Egglog REPL! (build: {})", env!("FULL_VERSION"));
             match egraph.repl() {
                 Ok(()) => std::process::exit(0),
                 Err(err) => {
-                    log::error!("{err}");
+                    tracing::error!("{err}");
                     std::process::exit(1)
                 }
             }
@@ -87,7 +88,7 @@ pub mod bin {
                         }
                     }
                     Err(err) => {
-                        log::error!("{err}");
+                        tracing::error!("{err}");
                         std::process::exit(1)
                     }
                 }
@@ -156,6 +157,8 @@ impl EGraph {
         let mut cmd_buffer = String::new();
 
         for line in BufReader::new(input).lines() {
+            // println!("{:?}", self.type_info.sorts);
+
             let line_str = line?;
             cmd_buffer.push_str(&line_str);
             cmd_buffer.push('\n');
@@ -188,7 +191,7 @@ where
                 writeln!(output, "{msg}")?;
             }
         }
-        Err(err) => log::error!("{err}"),
+        Err(err) => tracing::error!("{err}"),
     }
     Ok(())
 }

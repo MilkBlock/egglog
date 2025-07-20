@@ -5,7 +5,11 @@
 (rule ((= f0 (fib x))
        (= f1 (fib (+ x 1))))
       ((set (fib (+ x 2)) (+ f0 f1))))
+# 6 个 Variable
+# x  f10 f1   
+# args 里面还有 2个     out_var 里面还有一个 variable(11)这个前面没用过
 
+(function M (String) i64 :no-merge )
 (run 7)
 
 (check (= (fib 7) 13))

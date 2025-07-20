@@ -1500,6 +1500,7 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
+    /// typeinfo 的作用只有一个，那就是检查是否是 global symbol
     pub(crate) fn get_corresponding_var_or_lit(
         &self,
         typeinfo: &TypeInfo,

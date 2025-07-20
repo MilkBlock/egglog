@@ -298,7 +298,7 @@ impl RustRuleContext<'_, '_> {
 }
 
 #[derive(Clone)]
-struct RustRuleRhs<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> {
+struct RustRuleRhs<F: FnMut(&mut RustRuleContext, &[Value]) -> Option<()>> {
     name: String,
     inputs: Vec<ArcSort>,
     union_action: egglog_bridge::UnionAction,
@@ -797,6 +797,8 @@ pub fn add_container_sort(
 
 #[cfg(test)]
 mod tests {
+    use egglog_bridge::TableAction;
+
     use super::*;
 
     fn build_test_database() -> Result<EGraph, Error> {

@@ -2,7 +2,17 @@
 ; https://en.wikipedia.org/wiki/Prim%27s_algorithm
 
 ; Weighted edge (vertex 1 * vertex 2 * weight)
+# 大写 Edge 是 Constructor 的名字
 (datatype edge (Edge i64 i64 i64))
+# 你在 Edge 表插入 Row 那么这个Row 会
+# Row i64 i64 i64 edge timestamp tracing subsume
+#     -- --------  -     
+#      input      output <- DefaultVal 就是控制它的生成
+# 还会在 unionfind table 里面插入一个 edge 
+
+
+
+
 (relation edge-exists (edge))
 
 (relation mytrue ())
