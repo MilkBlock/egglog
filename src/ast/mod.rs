@@ -383,7 +383,7 @@ where
         span: Span,
         name: String,
         schema: Schema,
-        cost: Option<usize>,
+        cost: Option<DefaultCost>,
         unextractable: bool,
     },
 
@@ -860,7 +860,7 @@ where
     pub subtype: FunctionSubtype,
     pub schema: Schema,
     pub merge: Option<GenericExpr<Head, Leaf>>,
-    pub cost: Option<usize>,
+    pub cost: Option<DefaultCost>,
     pub unextractable: bool,
     /// Globals are desugared to functions, with this flag set to true.
     /// This is used by visualization to handle globals differently.
@@ -873,7 +873,7 @@ pub struct Variant {
     pub span: Span,
     pub name: String,
     pub types: Vec<String>,
-    pub cost: Option<usize>,
+    pub cost: Option<DefaultCost>,
 }
 
 impl Display for Variant {
@@ -908,6 +908,7 @@ impl Schema {
 }
 
 impl FunctionDecl {
+    /// Constructs a `function`
     pub fn function(
         span: Span,
         name: String,
@@ -926,11 +927,12 @@ impl FunctionDecl {
         }
     }
 
+    /// Constructs a `constructor`
     pub fn constructor(
         span: Span,
         name: String,
         schema: Schema,
-        cost: Option<usize>,
+        cost: Option<DefaultCost>,
         unextractable: bool,
     ) -> Self {
         Self {
@@ -945,6 +947,7 @@ impl FunctionDecl {
         }
     }
 
+    /// Constructs a `relation`
     pub fn relation(span: Span, name: String, input: Vec<String>) -> Self {
         Self {
             name,
@@ -1500,7 +1503,9 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
-    /// typeinfo 的作用只有一个，那就是检查是否是 global symbol
+    /// typeinfo 检查是否是 global symbol，并且将 Call 转化为 Var
+    /// 既然Call 会被转化为 Var,也就意味着它有匹配的能力
+    /// 这里的 typeinfo 用来查询是否是 global symbol
     pub(crate) fn get_corresponding_var_or_lit(
         &self,
         typeinfo: &TypeInfo,
