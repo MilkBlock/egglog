@@ -29,13 +29,7 @@ required-features = ["bin"]
 [features]
 default = ["bin"]
 
-bin = [
-  "serde",
-  "graphviz",
-  "dep:clap",
-  "dep:env_logger",
-  "dep:chrono",
-]
+bin = ["serde", "graphviz", "dep:clap", "dep:env_logger", "dep:chrono"]
 serde = ["egraph-serialize/serde"]
 graphviz = ["egraph-serialize/graphviz"]
 nondeterministic = []
@@ -59,12 +53,17 @@ dyn-clone = "1.0.17"
 
 # Backend
 # TODO: move egglog-backend repo into core egglog repo
-core-relations = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "cd51d04" }
-egglog-bridge = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "cd51d04" }
-numeric-id = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "cd51d04" }
+# core-relations = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "cd51d04" }
+# egglog-bridge = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "cd51d04" }
+# numeric-id = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "cd51d04" }
+core-relations = { path = "../egglog-backend/core-relations" }
+egglog-bridge = { path = "../egglog-backend/egglog-bridge" }
+numeric-id = { path = "../egglog-backend/numeric-id" }
 
 [build-dependencies]
-chrono = { version = "0.4", default-features = false, features = ["now"], optional = true }
+chrono = { version = "0.4", default-features = false, features = [
+  "now",
+], optional = true }
 
 [dev-dependencies]
 codspeed-criterion-compat = "2.7.2"

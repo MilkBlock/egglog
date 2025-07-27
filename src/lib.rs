@@ -14,7 +14,7 @@
 pub mod ast;
 mod cli;
 pub mod constraint;
-mod core;
+pub mod core;
 pub mod extract;
 pub mod prelude;
 pub mod scheduler;
@@ -33,9 +33,12 @@ use ast::*;
 pub use cli::bin::*;
 use constraint::{Constraint, Problem, SimpleTypeConstraint, TypeConstraint};
 use core::{AtomTerm, ResolvedAtomTerm, ResolvedCall};
-use core_relations::{make_external_func, ExternalFunctionId};
-pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
+use core_relations::{make_external_func, ExternalFunctionId, TableId};
+pub use core_relations::{
+    BaseValue, ContainerValue, ExecutionState, RuleBuilder, RuleSetBuilder, Value,
+};
 pub use egglog_bridge::FunctionRow;
+pub use core_relations::Variable;
 use egglog_bridge::{ColumnTy, IterationReport, QueryEntry};
 use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
@@ -270,7 +273,7 @@ impl FromStr for RunMode {
 /// ```
 #[derive(Clone)]
 pub struct EGraph {
-    backend: egglog_bridge::EGraph,
+    pub backend: egglog_bridge::EGraph,
     pub parser: Parser,
     names: check_shadowing::Names,
     /// pushed_egraph forms a linked list of pushed egraphs.
@@ -313,7 +316,7 @@ pub struct Function {
     decl: ResolvedFunctionDecl,
     schema: ResolvedSchema,
     can_subsume: bool,
-    backend_id: egglog_bridge::FunctionId,
+    pub backend_id: egglog_bridge::FunctionId,
 }
 
 impl Function {
