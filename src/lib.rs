@@ -1622,6 +1622,15 @@ impl EGraph {
     pub fn get_function(&self, name: &str) -> Option<&Function> {
         self.functions.get(name)
     }
+
+    /// Get table_id of given function name.
+    ///
+    /// Returns `None` if the table_id does not exist.
+    pub fn get_table_id(&self, name: &str) -> Option<TableId> {
+        let func = self.get_function(name)?;
+        self.backend.get_table_id(func.backend_id)
+    }
+
 }
 
 struct BackendRule<'a> {
