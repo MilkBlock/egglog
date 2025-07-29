@@ -21,7 +21,7 @@ pub mod scheduler;
 mod serialize;
 pub mod sort;
 mod termdag;
-mod typechecking;
+pub mod typechecking;
 pub mod util;
 
 // This is used to allow the `add_primitive` macro to work in
@@ -384,13 +384,13 @@ impl Default for EGraph {
             commands: Default::default(),
         };
 
-        add_base_sort(&mut eg, UnitSort, span!()).unwrap();
-        add_base_sort(&mut eg, StringSort, span!()).unwrap();
-        add_base_sort(&mut eg, BoolSort, span!()).unwrap();
-        add_base_sort(&mut eg, I64Sort, span!()).unwrap();
-        add_base_sort(&mut eg, F64Sort, span!()).unwrap();
-        add_base_sort(&mut eg, BigIntSort, span!()).unwrap();
-        add_base_sort(&mut eg, BigRatSort, span!()).unwrap();
+        add_leaf_sort(&mut eg, UnitSort, span!()).unwrap();
+        add_leaf_sort(&mut eg, StringSort, span!()).unwrap();
+        add_leaf_sort(&mut eg, BoolSort, span!()).unwrap();
+        add_leaf_sort(&mut eg, I64Sort, span!()).unwrap();
+        add_leaf_sort(&mut eg, F64Sort, span!()).unwrap();
+        add_leaf_sort(&mut eg, BigIntSort, span!()).unwrap();
+        add_leaf_sort(&mut eg, BigRatSort, span!()).unwrap();
         eg.type_info.add_presort::<MapSort>(span!()).unwrap();
         eg.type_info.add_presort::<SetSort>(span!()).unwrap();
         eg.type_info.add_presort::<VecSort>(span!()).unwrap();
@@ -912,9 +912,11 @@ impl EGraph {
         rule: ast::ResolvedRule,
         ruleset: String,
     ) -> Result<String, Error> {
+        log::debug!("run level 3 {:?}", rule);
         let core_rule =
             rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
         let (query, actions) = (&core_rule.body, &core_rule.head);
+        log::debug!("run level 4 {:#?} {:#?}", query, actions);
 
         let rule_id = {
             let mut translator = BackendRule::new(
@@ -1120,6 +1122,7 @@ impl EGraph {
     }
 
     fn run_command(&mut self, command: ResolvedNCommand) -> Result<(), Error> {
+        log::debug!("run level 2 {:?}", command);
         match command {
             ResolvedNCommand::SetOption { name, value } => {
                 let str = format!("Set option {} to {}", name, value);
@@ -1464,6 +1467,7 @@ impl EGraph {
     /// Run a program, represented as an AST.
     /// Return a list of messages.
     pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<String>, Error> {
+        log::debug!("run level 1 {:?}", program);
         let show_egglog_only = self.run_mode.show_egglog();
         for command in program {
             // Important to process each command individually
