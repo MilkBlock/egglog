@@ -56,9 +56,12 @@ dyn-clone = "1.0.17"
 # core-relations = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "cd51d04" }
 # egglog-bridge = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "cd51d04" }
 # numeric-id = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "cd51d04" }
-core-relations = { path = "../egglog-backend/core-relations" }
-egglog-bridge = { path = "../egglog-backend/egglog-bridge" }
-numeric-id = { path = "../egglog-backend/numeric-id" }
+core-relations = { git = "https://github.com/MilkBlock/egglog-backend.git" }
+egglog-bridge = { git = "https://github.com/MilkBlock/egglog-backend.git" }
+numeric-id = { git = "https://github.com/MilkBlock/egglog-backend.git" }
+# core-relations = { path = "../egglog-backend/core-relations" }
+# egglog-bridge = { path = "../egglog-backend/egglog-bridge" }
+# numeric-id = { path = "../egglog-backend/numeric-id" }
 
 [build-dependencies]
 chrono = { version = "0.4", default-features = false, features = [
