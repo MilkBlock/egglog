@@ -6,6 +6,7 @@
 //! See also [`rule`], [`rust_rule`], [`query`], [`LeafSort`],
 //! and [`ContainerSort`].
 
+use crate::core::{GenericCoreAction, GenericCoreRule};
 use crate::*;
 use std::any::{Any, TypeId};
 
@@ -786,13 +787,12 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
     }
 }
 
-/// Add a [`BaseSort`] to the e-graph
-pub fn add_base_sort(
+pub fn add_leaf_sort(
     egraph: &mut EGraph,
-    base_sort: impl BaseSort,
+    leaf_sort: impl BaseSort,
     span: Span,
 ) -> Result<(), TypeError> {
-    egraph.add_sort(BaseSortImpl(base_sort), span)
+    egraph.add_sort(BaseSortImpl(leaf_sort), span)
 }
 
 pub fn add_container_sort(
@@ -805,6 +805,7 @@ pub fn add_container_sort(
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     fn build_test_database() -> Result<EGraph, Error> {
@@ -984,5 +985,103 @@ mod tests {
         assert_eq!(results.data, [y]);
 
         Ok(())
+    }
+}
+
+impl EGraph {
+    pub fn raw_add_rule_with_name(
+        &mut self,
+        rule_name: String,
+        ruleset: String,
+        query: crate::core::Query<ResolvedCall, ResolvedVar>,
+        vars: &[(String, ArcSort)],
+        func: impl Fn(&mut RustRuleContext, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
+    ) -> Result<String, Error> {
+        // copy from [`rust_rule`]
+        let prim_name = self.parser.symbol_gen.fresh("rust_rule_prim");
+        let panic_id = self.backend.new_panic(format!("{prim_name}_panic"));
+        // add a primitive called rust_rule_prim
+        self.add_primitive(RustRuleRhs {
+            name: prim_name.clone(),
+            inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
+            union_action: egglog_bridge::UnionAction::new(&self.backend),
+            table_actions: self
+                .functions
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        egglog_bridge::TableAction::new(&self.backend, v.backend_id),
+                    )
+                })
+                .collect(),
+            panic_id,
+            func,
+        });
+        let action = GenericCoreAction::Let(
+            span!(),
+            ResolvedVar {
+                name: prim_name.to_string(),
+                sort: UnitSort.to_arcsort(),
+                is_global_ref: false,
+            },
+            ResolvedCall::from_resolution(
+                &prim_name,
+                vars.iter()
+                    .map(|x| x.1.clone())
+                    .chain(std::iter::once(UnitSort.to_arcsort()))
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+                &self.type_info,
+            ),
+            vars.iter()
+                .map(|x| {
+                    core::GenericAtomTerm::Var(
+                        span!(),
+                        ResolvedVar {
+                            name: x.0.to_string(),
+                            sort: x.1.clone(),
+                            is_global_ref: false,
+                        },
+                    )
+                })
+                .collect(),
+        );
+        let actions = crate::core::GenericCoreActions(vec![action]);
+
+        let rule_id = {
+            let mut translator = BackendRule::new(
+                self.backend.new_rule(&rule_name, self.seminaive),
+                &self.functions,
+                &self.type_info,
+            );
+            translator.query(&query, false);
+            translator.actions(&actions)?;
+            translator.build()
+        };
+
+        if let Some(rules) = self.rulesets.get_mut(&ruleset) {
+            match rules {
+                Ruleset::Rules(rules) => {
+                    match rules.entry(rule_name.clone()) {
+                        indexmap::map::Entry::Occupied(_) => {
+                            panic!("Rule '{rule_name}' was already present")
+                        }
+                        indexmap::map::Entry::Vacant(e) => e.insert((
+                            GenericCoreRule {
+                                span: span!(),
+                                body: query,
+                                head: actions,
+                            },
+                            rule_id,
+                        )),
+                    };
+                    Ok(rule_name)
+                }
+                Ruleset::Combined(_) => Err(Error::CombinedRulesetError(ruleset, span!())),
+            }
+        } else {
+            Err(Error::NoSuchRuleset(ruleset, span!()))
+        }
     }
 }
