@@ -33,12 +33,12 @@ use ast::*;
 pub use cli::bin::*;
 use constraint::{Constraint, Problem, SimpleTypeConstraint, TypeConstraint};
 use core::{AtomTerm, ResolvedAtomTerm, ResolvedCall};
+pub use core_relations::Variable;
 use core_relations::{make_external_func, ExternalFunctionId, TableId};
 pub use core_relations::{
     BaseValue, ContainerValue, ExecutionState, RuleBuilder, RuleSetBuilder, Value,
 };
 pub use egglog_bridge::FunctionRow;
-pub use core_relations::Variable;
 use egglog_bridge::{ColumnTy, IterationReport, QueryEntry};
 use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
@@ -279,7 +279,7 @@ pub struct EGraph {
     /// pushed_egraph forms a linked list of pushed egraphs.
     /// Pop reverts the egraph to the last pushed egraph.
     pushed_egraph: Option<Box<Self>>,
-    functions: IndexMap<String, Function>,
+    pub functions: IndexMap<String, Function>,
     rulesets: IndexMap<String, Ruleset>,
     interactive_mode: bool,
     pub run_mode: RunMode,
@@ -1638,6 +1638,58 @@ impl EGraph {
         self.backend.get_table_id(func.backend_id)
     }
 
+    pub fn with_tracing() -> Self {
+        let mut eg = Self {
+            backend: egglog_bridge::EGraph::with_tracing(),
+            parser: Default::default(),
+            names: Default::default(),
+            pushed_egraph: Default::default(),
+            functions: Default::default(),
+            rulesets: Default::default(),
+            run_mode: RunMode::Normal,
+            interactive_mode: false,
+            fact_directory: None,
+            seminaive: true,
+            extract_report: None,
+            recent_run_report: None,
+            overall_run_report: Default::default(),
+            msgs: Some(vec![]),
+            type_info: Default::default(),
+            schedulers: Default::default(),
+            commands: Default::default(),
+        };
+
+        add_leaf_sort(&mut eg, UnitSort, span!()).unwrap();
+        add_leaf_sort(&mut eg, StringSort, span!()).unwrap();
+        add_leaf_sort(&mut eg, BoolSort, span!()).unwrap();
+        add_leaf_sort(&mut eg, I64Sort, span!()).unwrap();
+        add_leaf_sort(&mut eg, F64Sort, span!()).unwrap();
+        add_leaf_sort(&mut eg, BigIntSort, span!()).unwrap();
+        add_leaf_sort(&mut eg, BigRatSort, span!()).unwrap();
+        eg.type_info.add_presort::<MapSort>(span!()).unwrap();
+        eg.type_info.add_presort::<SetSort>(span!()).unwrap();
+        eg.type_info.add_presort::<VecSort>(span!()).unwrap();
+        eg.type_info.add_presort::<FunctionSort>(span!()).unwrap();
+        eg.type_info.add_presort::<MultiSetSort>(span!()).unwrap();
+
+        add_primitive!(&mut eg, "!=" = |a: #, b: #| -?> () {
+            (a != b).then_some(())
+        });
+        add_primitive!(&mut eg, "value-eq" = |a: #, b: #| -?> () {
+            (a == b).then_some(())
+        });
+        add_primitive!(&mut eg, "ordering-min" = |a: #, b: #| -> # {
+            if a < b { a } else { b }
+        });
+        add_primitive!(&mut eg, "ordering-max" = |a: #, b: #| -> # {
+            if a > b { a } else { b }
+        });
+
+        eg.rulesets
+            .insert("".into(), Ruleset::Rules(Default::default()));
+
+        eg
+    }
 }
 
 struct BackendRule<'a> {
