@@ -3,17 +3,16 @@ use egglog::{ast::Expr, expr, fact, span, EGraph, SerializeConfig, TermDag, Valu
 fn main() {
     let mut egraph = egglog::EGraph::with_tracing();
     declare(&mut egraph);
-
-    // TermDag::
-    use egglog::prelude::exprs;
-    let value1 = log(egraph
-        .eval_expr(&expr!((MAdd (MNum 1) (MNum 2))))
-        .unwrap()
-        .1);
-    let value2 = log(egraph
-        .eval_expr(&expr!((MAdd (MNum 2) (MNum 1))))
-        .unwrap()
-        .1);
+    let expr1 = egraph
+        .parser
+        .get_expr_from_string(None, "(MAdd (MNum 2) (MNum 0))")
+        .unwrap();
+    let expr2 = egraph
+        .parser
+        .get_expr_from_string(None, "(MNum 2)")
+        .unwrap();
+    let (_, v1) = egraph.eval_expr(&expr1).unwrap();
+    let (_, v2) = egraph.eval_expr(&expr2).unwrap();
 
     egraph
         .parse_and_run_program(
@@ -27,7 +26,7 @@ fn main() {
         .serialize(SerializeConfig::default())
         .to_dot_file("examples/proof_test.dot")
         .unwrap();
-    let proof = egraph.backend.explain_terms_equal(value1, value2);
+    let proof = egraph.backend.explain_terms_equal(v1, v2);
     println!("{:?}", proof);
 }
 fn log<T: std::fmt::Debug>(t: T) -> T {
