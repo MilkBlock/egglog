@@ -45,6 +45,11 @@ pub mod bin {
         /// Prevents egglog from printing messages
         #[clap(long)]
         no_messages: bool,
+
+        #[clap(short = 'j', long, default_value = "1")]
+        /// Number of threads to use for parallel execution. Passing `0` will use the maximum
+        /// inferred parallelism available on the current system.
+        threads: usize,
     }
 
     /// Start a command-line interface for the E-graph.
@@ -61,6 +66,14 @@ pub mod bin {
             .init();
 
         let args = Args::parse();
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(args.threads)
+            .build_global()
+            .unwrap();
+        log::debug!(
+            "Initialized thread pool with {} threads",
+            rayon::current_num_threads()
+        );
         egraph.fact_directory.clone_from(&args.fact_directory);
         egraph.seminaive = !args.naive;
         egraph.run_mode = args.show;

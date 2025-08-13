@@ -237,8 +237,14 @@ impl EGraph {
                 )
             }
             NCommand::PrintOverallStatistics => ResolvedNCommand::PrintOverallStatistics,
-            NCommand::PrintTable(span, table, size) => {
-                ResolvedNCommand::PrintTable(span.clone(), table.clone(), *size)
+            NCommand::PrintFunction(span, table, size, file, mode) => {
+                ResolvedNCommand::PrintFunction(
+                    span.clone(),
+                    table.clone(),
+                    *size,
+                    file.clone(),
+                    *mode,
+                )
             }
             NCommand::PrintSize(span, n) => {
                 // Should probably also resolve the function symbol here
@@ -670,6 +676,8 @@ pub enum TypeError {
     },
     #[error("{1}\nUnbound symbol {0}")]
     Unbound(String, Span),
+    #[error("{1}\nVariable {0} is ungrounded")]
+    Ungrounded(String, Span),
     #[error("{1}\nUndefined sort {0}")]
     UndefinedSort(String, Span),
     #[error("{2}\nSort {0} definition is disallowed: {1}")]
