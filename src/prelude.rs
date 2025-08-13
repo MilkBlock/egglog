@@ -989,6 +989,9 @@ mod tests {
 }
 
 impl EGraph {
+    /// raw version of [`rust_rule`], almost same implmenation.
+    ///
+    /// [`Facts<String, String>`] -> [`core::Query`] and [`Actions`] -> [`Fn`]
     pub fn raw_add_rule_with_name(
         &mut self,
         rule_name: String,
@@ -997,7 +1000,6 @@ impl EGraph {
         vars: &[(String, ArcSort)],
         func: impl Fn(&mut RustRuleContext, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
     ) -> Result<String, Error> {
-        // copy from [`rust_rule`]
         let prim_name = self.parser.symbol_gen.fresh("rust_rule_prim");
         let panic_id = self.backend.new_panic(format!("{prim_name}_panic"));
         // add a primitive called rust_rule_prim

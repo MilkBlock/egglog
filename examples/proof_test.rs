@@ -1,4 +1,4 @@
-use egglog::{ast::Expr, expr, fact, span, EGraph, SerializeConfig, TermDag, Value};
+use egglog::{EGraph, SerializeConfig};
 
 fn main() {
     let mut egraph = egglog::EGraph::with_tracing();
@@ -28,10 +28,6 @@ fn main() {
         .unwrap();
     let proof = egraph.backend.explain_terms_equal(v1, v2);
     println!("{:?}", proof);
-}
-fn log<T: std::fmt::Debug>(t: T) -> T {
-    println!("{:?}", t);
-    t
 }
 
 fn declare(egraph: &mut EGraph) {
