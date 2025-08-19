@@ -183,6 +183,7 @@ impl EGraph {
 
         serializer.result
     }
+    /// WIP: for_each_while currently only return function columns, not including tracing column and subsumed column, which cause panic in current version
     pub fn serialize_tracing(&self, config: SerializeConfig) -> egraph_serialize::EGraph {
         // First collect a list of all the calls we want to serialize
         let all_calls: Vec<(
@@ -236,7 +237,7 @@ impl EGraph {
         // amoung all possible options.
         let node_ids: NodeIDs = all_calls.iter().fold(
             HashMap::default(),
-            |mut acc, (func, _input, _output, term, _subsumed, class_id, node_id)| {
+            |mut acc, (func, _input, _output, _term, _subsumed, class_id, node_id)| {
                 if func.schema.output.is_eq_sort() {
                     acc.entry(class_id.clone())
                         .or_default()
