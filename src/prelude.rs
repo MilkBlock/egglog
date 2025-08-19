@@ -11,12 +11,16 @@ use std::any::{Any, TypeId};
 
 // Re-exports in `prelude` for convenience.
 pub use crate::core::{GenericAtom, GenericAtomTerm, Query, ResolvedCall};
+pub type AnyhowResult<T> = egglog_bridge::Result<T>;
+pub use egglog_bridge::TermProof;
 pub use typechecking::FuncType;
 
+pub use core_relations::{ProofEdge, ProofReason, ProofStep};
 pub use egglog::ast::{Action, Fact, Facts, GenericActions};
 pub use egglog::sort::{BigIntSort, BigRatSort, BoolSort, F64Sort, I64Sort, StringSort, UnitSort};
 pub use egglog::{action, actions, datatype, expr, fact, facts, sort, vars};
 pub use egglog::{span, EGraph};
+pub use egglog_bridge::SideChannel;
 
 pub mod exprs {
     use super::*;

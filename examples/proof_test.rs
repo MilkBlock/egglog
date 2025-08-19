@@ -1,18 +1,23 @@
 use egglog::{EGraph, SerializeConfig};
 
 fn main() {
+    env_logger::init();
     let mut egraph = egglog::EGraph::with_tracing();
     declare(&mut egraph);
     let expr1 = egraph
         .parser
-        .get_expr_from_string(None, "(MAdd (MNum 2) (MNum 0))")
+        .get_expr_from_string(None, "(MAdd (MNum 2) (MNum 1))")
         .unwrap();
     let expr2 = egraph
         .parser
-        .get_expr_from_string(None, "(MNum 2)")
+        .get_expr_from_string(None, "(MNum 3)")
         .unwrap();
     let (_, v1) = egraph.eval_expr(&expr1).unwrap();
     let (_, v2) = egraph.eval_expr(&expr2).unwrap();
+    egraph
+        .serialize(SerializeConfig::default())
+        .to_dot_file("examples/proof_test_src.dot")
+        .unwrap();
 
     egraph
         .parse_and_run_program(
@@ -27,7 +32,12 @@ fn main() {
         .to_dot_file("examples/proof_test.dot")
         .unwrap();
     let proof = egraph.backend.explain_terms_equal(v1, v2);
-    println!("{:?}", proof);
+    let Ok(proof) = proof else { panic!() };
+    proof.lhs.dump_explanation(&mut std::io::stdout()).unwrap();
+    proof.rhs.dump_explanation(&mut std::io::stdout()).unwrap();
+    // explain_term
+    println!("{:#?}", proof);
+    // egraph.backend.dump_debug_info();
 }
 
 fn declare(egraph: &mut EGraph) {
