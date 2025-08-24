@@ -652,6 +652,9 @@ impl DisplacedTableWithProvenance {
             }
         }
     }
+    pub fn get_proof_graph(&self) -> Graph<Value, ProofEdge> {
+        self.proof_graph.clone()
+    }
 
     /// A simple proof generation algorithm that searches for the shortest path
     /// in the proof graph between `l` and `r`.
