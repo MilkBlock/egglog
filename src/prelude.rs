@@ -13,6 +13,7 @@ use std::any::{Any, TypeId};
 pub use crate::core::{GenericAtom, GenericAtomTerm, Query, ResolvedCall};
 pub type AnyhowResult<T> = egglog_bridge::Result<T>;
 pub use egglog_bridge::proof_format::TermProof;
+pub use egglog_bridge::ProofStore;
 pub use typechecking::FuncType;
 
 pub use core_relations::{ProofEdge, ProofReason, ProofStep};
