@@ -957,7 +957,7 @@ impl EGraph {
 
         // Remove the old row and insert the new one.
         rb.rebuild_row(table, &vars, &canon, subsume_var);
-        rb.build_internal(None)
+        rb.build_internal(Some(SourceSyntax::default()))
     }
 
     fn nonincremental_rebuild(&mut self, table: FunctionId, schema: &[ColumnTy]) -> RuleId {
@@ -991,7 +991,7 @@ impl EGraph {
         }
         rb.check_for_update(&lhs, &rhs).unwrap();
         rb.rebuild_row(table, &vars, &canon, subsume_var);
-        rb.build_internal(None) // skip the syntax check
+        rb.build_internal(Some(SourceSyntax::default())) // skip the syntax check
     }
 
     /// Gives the user a handle to the underlying ExecutionState. Useful for staging updates

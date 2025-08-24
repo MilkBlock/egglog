@@ -1,4 +1,5 @@
 use egglog::{EGraph, SerializeConfig};
+use egglog_bridge::ProofStore;
 
 fn main() {
     env_logger::init();
@@ -31,12 +32,19 @@ fn main() {
         .serialize(SerializeConfig::default())
         .to_dot_file("examples/proof_test.dot")
         .unwrap();
-    let proof = egraph.backend.explain_terms_equal(v1, v2);
-    let Ok(proof) = proof else { panic!() };
-    proof.lhs.dump_explanation(&mut std::io::stdout()).unwrap();
-    proof.rhs.dump_explanation(&mut std::io::stdout()).unwrap();
+    let mut prf_store = ProofStore::default();
+    let proof = egraph
+        .backend
+        .explain_terms_equal(v1, v2, &mut prf_store)
+        .unwrap();
+    prf_store
+        .print_eq_proof(proof, &mut std::io::stdout())
+        .unwrap();
+    // let Ok(proof) = proof else { panic!() };
+    // proof.lhs.dump_explanation(&mut std::io::stdout()).unwrap();
+    // proof.rhs.dump_explanation(&mut std::io::stdout()).unwrap();
     // explain_term
-    println!("{:#?}", proof);
+    // println!("{:#?}", proof);
     // egraph.backend.dump_debug_info();
 }
 

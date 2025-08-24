@@ -34,7 +34,7 @@ pub use cli::bin::*;
 use constraint::{Constraint, Problem, SimpleTypeConstraint, TypeConstraint};
 use core::{AtomTerm, ResolvedAtomTerm, ResolvedCall};
 pub use core_relations::Variable;
-use core_relations::{make_external_func, ExternalFunctionId, TableId};
+use core_relations::{make_external_func, ExternalFunctionId};
 pub use core_relations::{
     BaseValue, ContainerValue, ExecutionState, RuleBuilder, RuleSetBuilder, Value,
 };
@@ -1690,14 +1690,6 @@ impl EGraph {
     /// Returns `None` if the function does not exist.
     pub fn get_function(&self, name: &str) -> Option<&Function> {
         self.functions.get(name)
-    }
-
-    /// Get table_id of given function name.
-    ///
-    /// Returns `None` if the table_id does not exist.
-    pub fn get_table_id(&self, name: &str) -> Option<TableId> {
-        let func = self.get_function(name)?;
-        self.backend.get_table_id(func.backend_id)
     }
 
     pub fn with_tracing() -> Self {

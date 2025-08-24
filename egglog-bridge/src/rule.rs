@@ -276,11 +276,15 @@ impl RuleBuilder<'_> {
 
     /// Register the given rule with the egraph.
     pub fn build(self) -> RuleId {
-        assert!(
-            !self.egraph.tracing,
-            "proofs are enabled: use `build_with_syntax` instead"
-        );
-        self.build_internal(None)
+        // assert!(
+        //     !self.egraph.tracing,
+        //     "proofs are enabled: use `build_with_syntax` instead"
+        // );
+        if !self.egraph.tracing {
+            self.build_internal(None)
+        } else {
+            self.build_internal(Some(SourceSyntax::default()))
+        }
     }
 
     pub fn build_with_syntax(self, syntax: SourceSyntax) -> RuleId {
@@ -302,6 +306,8 @@ impl RuleBuilder<'_> {
                     Ok(())
                 }));
             }
+        } else {
+            panic!("ppppppppppp");
         }
         let res = self.query.rule_id;
         let info = RuleInfo {

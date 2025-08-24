@@ -531,7 +531,7 @@ pub struct DisplacedTableWithProvenance {
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
-struct ProofEdge {
+pub struct ProofEdge {
     reason: ProofReason,
     ts: Value,
 }
