@@ -206,7 +206,6 @@ impl EGraph {
                             return false;
                         }
                         let (out, inps) = row.vals[0..row.vals.len() - 2].split_last().unwrap();
-                        println!("get out {:?}", out);
                         tuples.push((
                             function,
                             inps.to_vec(),

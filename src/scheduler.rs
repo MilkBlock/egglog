@@ -112,13 +112,21 @@ impl Matches {
 
         if self.all_chosen {
             for row in self.matches.chunks(tuple_len) {
-                table_action.insert(state, row.iter().cloned().chain(std::iter::once(unit)));
+                table_action.insert(
+                    state,
+                    row.iter().cloned().chain(std::iter::once(unit)),
+                    None,
+                );
             }
             vec![]
         } else {
             for idx in self.chosen.iter() {
                 let row = &self.matches[idx * tuple_len..(idx + 1) * tuple_len];
-                table_action.insert(state, row.iter().cloned().chain(std::iter::once(unit)));
+                table_action.insert(
+                    state,
+                    row.iter().cloned().chain(std::iter::once(unit)),
+                    None,
+                );
             }
 
             // swap remove the chosen matches
@@ -362,7 +370,7 @@ impl SchedulerRuleInfo {
             &egraph.functions,
             &egraph.type_info,
         );
-        qrule_builder.query(&rule.body, true);
+        qrule_builder.query(&rule.body, &[], true);
         let entries = free_vars
             .iter()
             .map(|fv| qrule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
@@ -373,7 +381,7 @@ impl SchedulerRuleInfo {
             ColumnTy::Base(unit_type),
             || "collect_matches".to_string(),
         );
-        let qrule_id = qrule_builder.build();
+        let (qrule_id, _, _) = qrule_builder.build();
 
         // Step 2: build the action rule
         let mut arule_builder = BackendRule::new(
@@ -394,7 +402,7 @@ impl SchedulerRuleInfo {
         // Remove the entry as it's now done
         entries.pop();
         arule_builder.rb.remove(decided, &entries);
-        let arule_id = arule_builder.build();
+        let (arule_id, _, _) = arule_builder.build();
 
         SchedulerRuleInfo {
             free_vars,

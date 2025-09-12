@@ -39,9 +39,12 @@ pub use core_relations::{
     BaseValue, ContainerValue, ExecutionState, RuleBuilder, RuleSetBuilder, Value,
 };
 pub use egglog_bridge::FunctionRow;
-use egglog_bridge::{ColumnTy, IterationReport, QueryEntry};
+use egglog_bridge::{
+    ColumnTy, IterationReport, QueryEntry, ReasonSpecId, SourceExpr, SourceSyntax, TopLevelLhsExpr,
+};
 use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
+use log::info;
 use numeric_id::DenseIdMap;
 use prelude::*;
 use scheduler::{SchedulerId, SchedulerRecord};
@@ -973,13 +976,13 @@ impl EGraph {
         let (query, actions) = (&core_rule.body, &core_rule.head);
         log::debug!("run level 4 {:#?} {:#?}", query, actions);
 
-        let rule_id = {
+        let (rule_id, _, _) = {
             let mut translator = BackendRule::new(
                 self.backend.new_rule(&name, self.seminaive),
                 &self.functions,
                 &self.type_info,
             );
-            translator.query(query, false);
+            translator.query(query, &[], false);
             translator.actions(actions)?;
             translator.build()
         };
@@ -1015,7 +1018,7 @@ impl EGraph {
             &self.type_info,
         );
         translator.actions(&actions)?;
-        let id = translator.build();
+        let (id, _, _) = translator.build();
         let result = self.backend.run_rules(&[id]);
         self.backend.free_rule(id);
 
@@ -1088,7 +1091,7 @@ impl EGraph {
             || "this function will never panic".to_string(),
         );
 
-        let id = translator.build();
+        let (id, _, _) = translator.build();
         let rule_result = self.backend.run_rules(&[id]);
         self.backend.free_rule(id);
         self.backend.free_external_func(ext_id);
@@ -1151,17 +1154,17 @@ impl EGraph {
             &self.functions,
             &self.type_info,
         );
-        translator.query(&query, true);
+        translator.query(&query, &[], true);
         translator
             .rb
             .call_external_func(ext_id, &[], egglog_bridge::ColumnTy::Id, || {
                 "this function will never panic".to_string()
             });
-        let id = translator.build();
+        let (id, _, _) = translator.build();
         let _ = self.backend.run_rules(&[id]).unwrap();
         self.backend.free_rule(id);
 
-        self.backend.free_external_func(ext_id);
+        // self.backend.free_external_func(ext_id);
 
         let ext_sc_val = ext_sc.lock().unwrap().take();
         let matched = matches!(ext_sc_val, Some(()));
@@ -1487,14 +1490,15 @@ impl EGraph {
         if function_type.subtype != FunctionSubtype::Constructor {
             self.backend.with_execution_state(|es| {
                 for row in parsed_contents.iter() {
-                    table_action.insert(es, row.iter().copied());
+                    table_action.insert(es, row.iter().copied(), None);
                 }
                 Some(unit_val)
             });
         } else {
             self.backend.with_execution_state(|es| {
                 for row in parsed_contents.iter() {
-                    table_action.lookup(es, row);
+                    // default disabled because eggplant don't need it
+                    table_action.lookup(es, row, None);
                 }
                 Some(unit_val)
             });
@@ -1751,6 +1755,7 @@ struct BackendRule<'a> {
     entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
     functions: &'a IndexMap<String, Function>,
     type_info: &'a TypeInfo,
+    syntax: SourceSyntax,
 }
 
 impl<'a> BackendRule<'a> {
@@ -1764,6 +1769,7 @@ impl<'a> BackendRule<'a> {
             functions,
             type_info,
             entries: Default::default(),
+            syntax: SourceSyntax::default(),
         }
     }
 
@@ -1853,17 +1859,45 @@ impl<'a> BackendRule<'a> {
         args.into_iter().map(|x| self.entry(x)).collect()
     }
 
-    fn query(&mut self, query: &core::Query<ResolvedCall, ResolvedVar>, include_subsumed: bool) {
+    fn query(
+        &mut self,
+        query: &core::Query<ResolvedCall, ResolvedVar>,
+        vars: &[(String, ArcSort)],
+        include_subsumed: bool,
+    ) {
+        let mut name2expr = IndexMap::default();
+        let vars = IndexSet::from_iter(vars.iter().map(|x| x.0.to_string()));
         for atom in &query.atoms {
             match &atom.head {
                 ResolvedCall::Func(f) => {
-                    let f = self.func(f);
                     let args = self.args(&atom.args);
+                    info!("args:{:?}", args);
                     let is_subsumed = match include_subsumed {
                         true => None,
                         false => Some(false),
                     };
-                    self.rb.query_table(f, &args, is_subsumed).unwrap();
+                    let _atom_id = self
+                        .rb
+                        .query_table(self.func(f), &args, is_subsumed)
+                        .unwrap();
+
+                    for (arg, entry) in atom.args.iter().zip(args.iter()) {
+                        match entry {
+                            QueryEntry::Var { id, name } => {
+                                let name = name.as_ref().unwrap().to_string();
+                                name2expr.insert(
+                                    name.clone(),
+                                    SourceExpr::Var {
+                                        id: *id,
+                                        ty: arg.output().column_ty(self.rb.egraph()),
+                                        name: name.clone(),
+                                    },
+                                );
+                                // }
+                            }
+                            QueryEntry::Const { val: _, ty: _ } => panic!(),
+                        }
+                    }
                 }
                 ResolvedCall::Primitive(p) => {
                     let (p, args, ty) = self.prim(p, &atom.args);
@@ -1871,6 +1905,12 @@ impl<'a> BackendRule<'a> {
                 }
             }
         }
+        for var in vars {
+            let syntax_id = self.syntax.add_expr(name2expr.get(&var).unwrap().clone());
+            self.syntax
+                .add_toplevel_expr(TopLevelLhsExpr::Exists(syntax_id));
+        }
+        info!("got syntax: {:#?}", self.syntax)
     }
 
     fn actions(&mut self, actions: &core::ResolvedCoreActions) -> Result<(), Error> {
@@ -1939,8 +1979,18 @@ impl<'a> BackendRule<'a> {
         Ok(())
     }
 
-    fn build(self) -> egglog_bridge::RuleId {
-        self.rb.build()
+    fn build(
+        self,
+    ) -> (
+        egglog_bridge::RuleId,
+        Option<SourceSyntax>,
+        Option<ReasonSpecId>,
+    ) {
+        if self.rb.egraph().tracing() {
+            self.rb.build_with_syntax(&self.syntax)
+        } else {
+            self.rb.build()
+        }
     }
 }
 

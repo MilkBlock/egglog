@@ -128,79 +128,89 @@ fn main() {
         let rules = [
             define_rule! {
                 [egraph] ((-> (add x y) id)) => ((set (add y x) id))
-            },
+            }
+            .0,
             define_rule! {
                 [egraph] ((-> (mul x y) id)) => ((set (mul y x) id))
-            },
+            }
+            .0,
             define_rule! {
                 [egraph] ((-> (add x (add y z)) id)) => ((set (add (add x y) z) id))
-            },
+            }
+            .0,
             define_rule! {
                 [egraph] ((-> (mul x (mul y z)) id)) => ((set (mul (mul x y) z) id))
-            },
+            }
+            .0,
             define_rule! {
                 [egraph] ((-> (sub x y) id)) => ((set (add x (mul (rat {neg1.clone()}) y)) id))
-            },
+            }
+            .0,
             define_rule! {
                 [egraph] ((-> (add a (rat {zero.clone()})) id)) => ((union a id))
-            },
+            }
+            .0,
             define_rule! {
                 [egraph] ((-> (rat {zero.clone()}) z_id) (-> (mul a z_id) id))
                         => ((union id z_id))
-            },
+            }
+            .0,
             define_rule! {
                 [egraph] ((-> (mul a (rat {one.clone()})) id)) => ((union a id))
-            },
+            }
+            .0,
             define_rule! {
                 [egraph] ((-> (sub x x) id)) => ((union id (rat {zero})))
-            },
+            }
+            .0,
             define_rule! {
                 [egraph] ((-> (mul x (add b c)) id)) => ((set (add (mul x b) (mul x c)) id))
-            },
+            }
+            .0,
             define_rule! {
                 [egraph] ((-> (add (mul x a) (mul x b)) id)) => ((set (mul x (add a b)) id))
-            },
+            }.0,
             define_rule! {
                 [egraph] ((-> (mul (pow a b) (pow a c)) id)) => ((set (pow a (add b c)) id))
-            },
+            }.0,
             define_rule! {
                 [egraph] ((-> (pow x (rat {one.clone()})) id)) => ((union x id))
-            },
+            }.0,
             define_rule! {
                 [egraph] ((-> (pow x (rat {two})) id)) => ((set (mul x x) id))
-            },
+            }.0,
             define_rule! {
                 [egraph] ((-> (diff x (add a b)) id)) => ((set (add (diff x a) (diff x b)) id))
-            },
+            }.0,
             define_rule! {
                 [egraph] ((-> (diff x (mul a b)) id)) => ((set (add (mul a (diff x b)) (mul b (diff x a))) id))
-            },
+            }.0,
             define_rule! {
                 [egraph] ((-> (diff x (sin x)) id)) => ((set (cos x) id))
-            },
+            }.0,
             define_rule! {
                 [egraph] ((-> (diff x (cos x)) id)) => ((set (mul (rat {neg1.clone()}) (sin x)) id))
-            },
+            }.0,
             define_rule! {
                 [egraph] ((-> (integral (rat {one}) x) id)) => ((union id x))
-            },
+            }.0,
             define_rule! {
                 [egraph] ((-> (integral (cos x) x) id)) => ((set (sin x) id))
-            },
+            }.0,
             define_rule! {
                 [egraph] ((-> (integral (sin x) x) id)) => ((set (mul (rat {neg1}) (cos x)) id))
-            },
+            }.0,
             define_rule! {
                 [egraph] ((-> (integral (add f g) x) id)) => ((set (add (integral f x) (integral g x)) id))
-            },
+            }.0,
             define_rule! {
                 [egraph] ((-> (integral (sub f g) x) id)) => ((set (sub (integral f x) (integral g x)) id))
-            },
+            }.0,
             define_rule! {
                 [egraph] ((-> (integral (mul a b) x) id))
                 => ((set (sub (mul a (integral b x))
                               (integral (mul (diff x a) (integral b x)) x)) id))
-            },
+            }.0,
         ];
         {
             let one = egraph.base_values().get(Rational64::new(1, 1));

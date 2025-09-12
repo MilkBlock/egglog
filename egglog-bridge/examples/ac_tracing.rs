@@ -22,12 +22,12 @@ fn main() {
         can_subsume: false,
     });
 
-    let add_comm = define_rule! {
+    let (add_comm, _, _) = define_rule! {
         [egraph] ((-> (add_table x y) id))
               => ((set (add_table y x) id))
     };
 
-    let add_assoc = define_rule! {
+    let (add_assoc, _, _) = define_rule! {
         [egraph] ((-> (add_table x (add_table y z)) id))
               => ((set (add_table (add_table x y) z) id))
     };

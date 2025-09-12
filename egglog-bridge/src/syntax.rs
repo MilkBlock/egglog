@@ -11,6 +11,7 @@ use core_relations::{
     make_external_func, ColumnId, CounterId, ExecutionState, ExternalFunctionId, MergeVal,
     RuleBuilder, TableId, Value, WriteVal,
 };
+use log::info;
 use numeric_id::{define_id, DenseIdMap, IdVec, NumericId};
 use smallvec::SmallVec;
 
@@ -80,7 +81,10 @@ impl SourceSyntax {
     pub fn add_expr(&mut self, expr: SourceExpr) -> SyntaxId {
         match &expr {
             SourceExpr::Const { .. } | SourceExpr::FunctionCall { .. } => {}
-            SourceExpr::Var { id, ty, .. } => self.vars.push((*id, *ty)),
+            SourceExpr::Var { id, ty, .. } => {
+                info!("add variable {:?} {:?}", id, ty);
+                self.vars.push((*id, *ty))
+            }
             SourceExpr::ExternalCall { var, ty, .. } => self.vars.push((*var, *ty)),
         };
         self.backing.push(expr)
@@ -99,6 +103,19 @@ impl SourceSyntax {
                 None
             }
         })
+    }
+    fn map_vars_to_name(
+        &self,
+        map: &std::collections::HashMap<Variable, String>,
+        type_info: &std::collections::HashMap<ColumnTy, String>,
+    ) -> indexmap::IndexSet<(String, String)> {
+        let mut index_set = indexmap::IndexSet::default();
+        for (var, column_ty) in &self.vars {
+            let var_name = map.get(var).unwrap();
+            let ty_name = type_info.get(column_ty).unwrap();
+            index_set.insert((var_name.clone(), ty_name.clone()));
+        }
+        index_set
     }
 }
 
@@ -133,7 +150,10 @@ impl ProofBuilder {
         &mut self,
         syntax: SourceSyntax,
         egraph: &mut EGraph,
-    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<core_relations::Variable> + Clone {
+    ) -> (
+        impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<core_relations::Variable> + Clone,
+        ReasonSpecId,
+    ) {
         // first, create all the relevant cong metadata
         let mut metadata = DenseIdMap::default();
         for func in syntax.funcs() {
@@ -145,42 +165,47 @@ impl ProofBuilder {
             syntax: syntax.clone(),
         }));
         let reason_table = egraph.reason_table(&reason_spec);
-        let reason_id = egraph.proof_specs.push(reason_spec);
+        info!("got reason_spec: {:?}", reason_spec);
+        let reason_spec_id = egraph.proof_specs.push(reason_spec);
         let reason_counter = egraph.reason_counter;
-        let atom_mapping = self.term_vars.clone();
-        move |bndgs, rb| {
-            // Now, insert all needed reconstructed terms.
-            let mut state = TermReconstructionState {
-                syntax: &syntax,
-                syntax_mapping: Default::default(),
-                metadata: metadata.clone(),
-                atom_mapping: atom_mapping.clone(),
-            };
-            for toplevel_expr in &syntax.roots {
-                match toplevel_expr {
-                    TopLevelLhsExpr::Exists(id) => {
-                        state.justify_query(*id, bndgs, rb)?;
-                    }
-                    TopLevelLhsExpr::Eq(id1, id2) => {
-                        state.justify_query(*id1, bndgs, rb)?;
-                        state.justify_query(*id2, bndgs, rb)?;
+        let atom_mapping: DenseIdMap<AtomId, QueryEntry> = self.term_vars.clone();
+        (
+            move |bndgs, rb| {
+                // Now, insert all needed reconstructed terms.
+                let mut state = TermReconstructionState {
+                    syntax: &syntax,
+                    syntax_mapping: Default::default(),
+                    metadata: metadata.clone(),
+                    atom_mapping: atom_mapping.clone(),
+                };
+                for toplevel_expr in &syntax.roots {
+                    match toplevel_expr {
+                        TopLevelLhsExpr::Exists(id) => {
+                            state.justify_query(*id, bndgs, rb)?;
+                        }
+                        TopLevelLhsExpr::Eq(id1, id2) => {
+                            state.justify_query(*id1, bndgs, rb)?;
+                            state.justify_query(*id2, bndgs, rb)?;
+                        }
                     }
                 }
-            }
-            // Once those terms are all guaranteed to be in the e-graph, we only need to write down
-            // the base substitution of variables into a reason table.
-            let mut row = SmallVec::<[core_relations::QueryEntry; 8]>::new();
-            row.push(Value::new(reason_id.rep()).into());
-            for (var, _) in &syntax.vars {
-                row.push(bndgs.mapping[*var]);
-            }
-            Ok(rb.lookup_or_insert(
-                reason_table,
-                &row,
-                &[WriteVal::IncCounter(reason_counter)],
-                ColumnId::from_usize(row.len()),
-            )?)
-        }
+                // Once those terms are all guaranteed to be in the e-graph, we only need to write down
+                // the base substitution of variables into a reason table.
+                let mut row = SmallVec::<[core_relations::QueryEntry; 8]>::new();
+                row.push(Value::new(reason_spec_id.rep()).into());
+                // 先是 reason id 其次就是所有的 syntax.vars 所以我
+                for (var, _) in &syntax.vars {
+                    row.push(bndgs.mapping[*var]);
+                }
+                Ok(rb.lookup_or_insert(
+                    reason_table,
+                    &row,
+                    &[WriteVal::IncCounter(reason_counter)],
+                    ColumnId::from_usize(row.len()),
+                )?)
+            },
+            reason_spec_id,
+        )
     }
 
     fn build_cong_metadata(&self, func: FunctionId, egraph: &mut EGraph) -> FunctionCongMetadata {

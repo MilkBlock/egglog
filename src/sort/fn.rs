@@ -375,7 +375,7 @@ impl FunctionContainer {
     pub fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
         match &self.0 {
-            ResolvedFunctionId::Lookup(action) => action.lookup(exec_state, &args),
+            ResolvedFunctionId::Lookup(action) => action.lookup(exec_state, &args, None),
             ResolvedFunctionId::Prim(prim) => exec_state.call_external_func(*prim, &args),
         }
     }

@@ -12,8 +12,10 @@ use std::any::{Any, TypeId};
 // Re-exports in `prelude` for convenience.
 pub use crate::core::{GenericAtom, GenericAtomTerm, Query, ResolvedCall};
 pub type AnyhowResult<T> = egglog_bridge::Result<T>;
+use core_relations::TableId;
 pub use egglog_bridge::proof_format::TermProof;
 pub use egglog_bridge::ProofStore;
+use egglog_bridge::{RuleId, SideChannel, TableAction, TermRowInsert};
 pub use typechecking::FuncType;
 
 pub use core_relations::{ProofEdge, ProofReason, ProofStep};
@@ -21,7 +23,8 @@ pub use egglog::ast::{Action, Fact, Facts, GenericActions};
 pub use egglog::sort::{BigIntSort, BigRatSort, BoolSort, F64Sort, I64Sort, StringSort, UnitSort};
 pub use egglog::{action, actions, datatype, expr, fact, facts, sort, vars};
 pub use egglog::{span, EGraph};
-pub use egglog_bridge::SideChannel;
+pub use egglog_bridge::EqProofId;
+pub use egglog_bridge::TermProofId;
 
 pub mod exprs {
     use super::*;
@@ -251,12 +254,49 @@ pub fn rule(
 /// See the [`rust_rule`] documentation for an example of how to use this.
 pub struct RustRuleContext<'a, 'b> {
     exec_state: &'a mut ExecutionState<'b>,
+    proof_value: Option<Value>,
     union_action: egglog_bridge::UnionAction,
-    table_actions: HashMap<String, egglog_bridge::TableAction>,
+    table_actions: HashMap<String, (egglog_bridge::TableAction, Option<TermRowInsert>)>,
+    // term_actions: HashMap<usize,egglog_bridge::TableAction>,
     panic_id: ExternalFunctionId,
 }
 
-impl RustRuleContext<'_, '_> {
+impl<'a, 'b> RustRuleContext<'a, 'b> {
+    pub fn new<'c>(
+        exec_state: &'c mut ExecutionState<'b>,
+        input_values: Option<&'_ [Value]>,
+        union_action: egglog_bridge::UnionAction,
+        table_actions: HashMap<String, (egglog_bridge::TableAction, Option<TermRowInsert>)>,
+        reason_table_and_spec: Option<(TableId, ReasonSpecId)>,
+        panic_id: ExternalFunctionId,
+    ) -> Self
+    where
+        'c: 'a,
+    {
+        let proof_value = match (input_values, reason_table_and_spec) {
+            (Some(input_values), Some(reason_tbl_and_spec)) => Some(TableAction::query_reason(
+                reason_tbl_and_spec.0,
+                reason_tbl_and_spec.1,
+                exec_state,
+                input_values,
+            )),
+            _ => {
+                info!(
+                    "tracing is disabled {:?} {:?}",
+                    input_values, reason_table_and_spec
+                );
+                None
+            }
+        };
+        info!("get proof_val {:?}", proof_value);
+        Self {
+            exec_state,
+            proof_value,
+            union_action,
+            table_actions,
+            panic_id,
+        }
+    }
     /// Convert from an egglog value to a Rust type.
     pub fn value_to_base<T: BaseValue>(&self, x: Value) -> T {
         self.exec_state.base_values().unwrap::<T>(x)
@@ -267,39 +307,49 @@ impl RustRuleContext<'_, '_> {
         self.exec_state.base_values().get::<T>(x)
     }
 
-    fn get_table_action(&self, table: &str) -> egglog_bridge::TableAction {
+    fn get_table_action(&self, table: &str) -> (egglog_bridge::TableAction, Option<TermRowInsert>) {
         self.table_actions[table].clone()
     }
 
     /// Do a table lookup. This is potentially a mutable operation!
     /// For more information, see `egglog_bridge::TableAction::lookup`.
     pub fn lookup(&mut self, table: &str, key: &[Value]) -> Option<Value> {
-        self.get_table_action(table).lookup(self.exec_state, &key)
+        let (tbl_action, term_insert) = self.get_table_action(table);
+        let term = term_insert
+            .map(|term_insert| term_insert(self.exec_state, key, self.proof_value.unwrap()));
+        tbl_action.lookup(self.exec_state, key, term)
     }
 
     /// Union two values in the e-graph.
     /// For more information, see `egglog_bridge::UnionAction::union`.
+    /// 真是零开销啊....
     pub fn union(&mut self, x: Value, y: Value) {
-        self.union_action.union(self.exec_state, x, y)
+        self.union_action
+            .union(self.exec_state, x, y, self.proof_value)
     }
 
     /// Insert a row into a table.
     /// For more information, see `egglog_bridge::TableAction::insert`.
     pub fn insert(&mut self, table: &str, row: impl Iterator<Item = Value>) {
-        self.get_table_action(table).insert(self.exec_state, row)
+        let row = row.collect::<Vec<_>>();
+        let (mut tbl_action, term_insert) = self.get_table_action(table);
+        let term = term_insert
+            .map(|term_insert| term_insert(self.exec_state, &row, self.proof_value.unwrap()));
+        tbl_action.insert(self.exec_state, row.into_iter(), term)
     }
 
     /// Remove a row from a table.
     /// For more information, see `egglog_bridge::TableAction::remove`.
     pub fn remove(&mut self, table: &str, key: &[Value]) {
-        self.get_table_action(table).remove(self.exec_state, key)
+        self.get_table_action(table).0.remove(self.exec_state, key)
     }
 
     /// Subsume a row in a table.
     /// For more information, see `egglog_bridge::TableAction::subsume`.
     pub fn subsume(&mut self, table: &str, key: &[Value]) {
         self.get_table_action(table)
-            .subsume(self.exec_state, key.iter().copied())
+            .0
+            .subsume(self.exec_state, key.iter().copied(), None)
     }
 
     /// Panic.
@@ -317,8 +367,11 @@ struct RustRuleRhs<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> {
     name: String,
     inputs: Vec<ArcSort>,
     union_action: egglog_bridge::UnionAction,
-    table_actions: HashMap<String, egglog_bridge::TableAction>,
+    table_actions: HashMap<String, (egglog_bridge::TableAction, Option<TermRowInsert>)>,
     panic_id: ExternalFunctionId,
+    /// channel used to send the reason table and reason spec id to the rhs context
+    /// you can't them before rule is added but Rhs should be created before rule is added
+    reason_tbl_and_spec_channel: SideChannel<(TableId, ReasonSpecId)>,
     func: F,
 }
 
@@ -338,12 +391,16 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
     }
 
     fn apply(&self, exec_state: &mut ExecutionState, values: &[Value]) -> Option<Value> {
-        let mut context = RustRuleContext {
+        let reason_table_and_spec = self.reason_tbl_and_spec_channel.lock().unwrap().clone();
+        info!("rust_rule_context apply get {:?}", reason_table_and_spec);
+        let mut context = RustRuleContext::new(
             exec_state,
-            union_action: self.union_action,
-            table_actions: self.table_actions.clone(),
-            panic_id: self.panic_id,
-        };
+            Some(values),
+            self.union_action,
+            self.table_actions.clone(),
+            reason_table_and_spec,
+            self.panic_id,
+        );
         (self.func)(&mut context, values)?;
         Some(exec_state.base_values().get(()))
     }
@@ -426,49 +483,13 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
 /// # Ok::<(), egglog::Error>(())
 /// ```
 pub fn rust_rule(
-    egraph: &mut EGraph,
-    ruleset: &str,
-    vars: &[(&str, ArcSort)],
-    facts: Facts<String, String>,
-    func: impl Fn(&mut RustRuleContext, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
+    _egraph: &mut EGraph,
+    _ruleset: &str,
+    _vars: &[(&str, ArcSort)],
+    _facts: Facts<String, String>,
+    _func: impl Fn(&mut RustRuleContext, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
 ) -> Result<Vec<String>, Error> {
-    let prim_name = egraph.parser.symbol_gen.fresh("rust_rule_prim");
-    let panic_id = egraph.backend.new_panic(format!("{prim_name}_panic"));
-    egraph.add_primitive(RustRuleRhs {
-        name: prim_name.clone(),
-        inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
-        union_action: egglog_bridge::UnionAction::new(&egraph.backend),
-        table_actions: egraph
-            .functions
-            .iter()
-            .map(|(k, v)| {
-                (
-                    k.clone(),
-                    egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
-                )
-            })
-            .collect(),
-        panic_id,
-        func,
-    });
-
-    let rule = Rule {
-        span: span!(),
-        head: GenericActions(vec![GenericAction::Expr(
-            span!(),
-            exprs::call(
-                &prim_name,
-                vars.iter().map(|(v, _)| exprs::var(v)).collect(),
-            ),
-        )]),
-        body: facts.0,
-    };
-
-    egraph.run_program(vec![Command::Rule {
-        name: format!("{rule:?}"),
-        ruleset: ruleset.to_owned(),
-        rule,
-    }])
+    panic!("should not use rust_rule because tracing is not supported as for rust_rule");
 }
 impl EGraph {
     /// raw version of [`rust_rule`], almost same implmenation but with different parameter types.
@@ -481,27 +502,33 @@ impl EGraph {
         query: crate::core::Query<ResolvedCall, ResolvedVar>,
         vars: &[(String, ArcSort)],
         func: impl Fn(&mut RustRuleContext, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
-    ) -> Result<String, Error> {
+    ) -> Result<(String, RuleId), Error> {
         use crate::core::{GenericCoreAction, GenericCoreRule};
-        let prim_name = self.parser.symbol_gen.fresh("rust_rule_prim");
+        let prim_name = self.parser.symbol_gen.fresh(rule_name.as_str());
         let panic_id = self.backend.new_panic(format!("{prim_name}_panic"));
-        // add a primitive called rust_rule_prim
-        self.add_primitive(RustRuleRhs {
-            name: prim_name.clone(),
-            inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
-            union_action: egglog_bridge::UnionAction::new(&self.backend),
-            table_actions: self
-                .functions
+        let table_actions = {
+            self.functions
                 .iter()
                 .map(|(k, v)| {
                     (
                         k.clone(),
-                        egglog_bridge::TableAction::new(&self.backend, v.backend_id),
+                        (
+                            egglog_bridge::TableAction::new(&self.backend, v.backend_id),
+                            self.backend.get_term_row_insert_fn(v.backend_id),
+                        ),
                     )
                 })
-                .collect(),
+                .collect()
+        };
+        let reason_tbl_channel = SideChannel::default();
+        self.add_primitive(RustRuleRhs {
+            name: prim_name.clone(),
+            inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
+            union_action: egglog_bridge::UnionAction::new(&self.backend),
+            table_actions,
             panic_id,
             func,
+            reason_tbl_and_spec_channel: reason_tbl_channel.clone(),
         });
         let action = GenericCoreAction::Let(
             span!(),
@@ -533,17 +560,22 @@ impl EGraph {
                 .collect(),
         );
         let actions = crate::core::GenericCoreActions(vec![action]);
-
-        let rule_id = {
+        let (rule_id, _, reason_spec_id) = {
             let mut translator = BackendRule::new(
                 self.backend.new_rule(&rule_name, self.seminaive),
                 &self.functions,
                 &self.type_info,
             );
-            translator.query(&query, false);
+            translator.query(&query, vars, false);
             translator.actions(&actions)?;
             translator.build()
         };
+        *reason_tbl_channel.lock().unwrap() =
+            reason_spec_id.map(|id| (self.backend.reason_spec_id_to_reason_table(id), id));
+        info!(
+            "channel send {:?}",
+            reason_spec_id.map(|id| (self.backend.reason_spec_id_to_reason_table(id), id))
+        );
 
         if let Some(rules) = self.rulesets.get_mut(&ruleset) {
             match rules {
@@ -561,7 +593,7 @@ impl EGraph {
                             rule_id,
                         )),
                     };
-                    Ok(rule_name)
+                    Ok((rule_name, rule_id))
                 }
                 Ruleset::Combined(_) => Err(Error::CombinedRulesetError(ruleset, span!())),
             }

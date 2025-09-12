@@ -49,12 +49,12 @@ fn ac_test(tracing: bool, can_subsume: bool) {
         can_subsume,
     });
 
-    let add_comm = define_rule! {
+    let (add_comm, _, _) = define_rule! {
         [egraph] ((-> (add_table x y) id))
               => ((set (add_table y x) id))
     };
 
-    let add_assoc = define_rule! {
+    let (add_assoc, _, _) = define_rule! {
         [egraph] ((-> (add_table x (add_table y z)) id))
               => ((set (add_table (add_table x y) z) id))
     };
@@ -156,12 +156,12 @@ fn ac_fail() {
         can_subsume: false,
     });
 
-    let add_comm = define_rule! {
+    let (add_comm, _, _) = define_rule! {
         [egraph] ((-> (add_table x y) id) (-> (num_table {one}) x))
               => ((set (add_table y x) id))
     };
 
-    let add_assoc = define_rule! {
+    let (add_assoc, _, _) = define_rule! {
         [egraph] ((-> (add_table x (add_table y z)) id))
               => ((set (add_table (add_table x y) z) id))
     };
@@ -346,79 +346,79 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
     let rules = [
         define_rule! {
             [egraph] ((-> (add x y) id)) => ((set (add y x) id))
-        },
+        }.0,
         define_rule! {
             [egraph] ((-> (mul x y) id)) => ((set (mul y x) id))
-        },
+        }.0,
         define_rule! {
             [egraph] ((-> (add x (add y z)) id)) => ((set (add (add x y) z) id))
-        },
+        }.0,
         define_rule! {
             [egraph] ((-> (mul x (mul y z)) id)) => ((set (mul (mul x y) z) id))
-        },
+        }.0,
         define_rule! {
             [egraph] ((-> (sub x y) id)) => ((set (add x (mul (rat {neg1.clone()}) y)) id))
-        },
+        }.0,
         define_rule! {
             [egraph] ((-> (add a (rat {zero.clone()})) id)) => ((union a id))
-        },
+        }.0,
         define_rule! {
             [egraph] ((-> (rat {zero.clone()}) z_id) (-> (mul a z_id) id))
                     => ((union id z_id))
-        },
+        }.0,
         define_rule! {
             [egraph] ((-> (mul a (rat {one.clone()})) id)) => ((union a id))
-        },
+        }.0,
         define_rule! {
             [egraph] ((-> (sub x x) id)) => ((union id (rat {zero})))
-        },
+        }.0,
         define_rule! {
             [egraph] ((-> (mul x (add b c)) id)) => ((set (add (mul x b) (mul x c)) id))
-        },
+        }.0,
         define_rule! {
             [egraph] ((-> (add (mul x a) (mul x b)) id)) => ((set (mul x (add a b)) id))
-        },
+        }.0,
         define_rule! {
             [egraph] ((-> (mul (pow a b) (pow a c)) id)) => ((set (pow a (add b c)) id))
-        },
+        }.0,
         define_rule! {
             [egraph] ((-> (pow x (rat {one.clone()})) id)) => ((union x id))
-        },
+        }.0,
         define_rule! {
             [egraph] ((-> (pow x (rat {two})) id)) => ((set (mul x x) id))
-        },
+        }.0,
         define_rule! {
             [egraph] ((-> (diff x (add a b)) id)) => ((set (add (diff x a) (diff x b)) id))
-        },
+        }.0,
         define_rule! {
             [egraph] ((-> (diff x (mul a b)) id)) => ((set (add (mul a (diff x b)) (mul b (diff x a))) id))
-        },
+        }.0,
         define_rule! {
             [egraph] ((-> (diff x (sin x)) id)) => ((set (cos x) id))
-        },
+        }.0,
         define_rule! {
             [egraph] ((-> (diff x (cos x)) id)) => ((set (mul (rat {neg1.clone()}) (sin x)) id))
-        },
+        }.0,
         define_rule! {
             [egraph] ((-> (integral (rat {one}) x) id)) => ((union id x))
-        },
+        }.0,
         define_rule! {
             [egraph] ((-> (integral (cos x) x) id)) => ((set (sin x) id))
-        },
+        }.0,
         define_rule! {
             [egraph] ((-> (integral (sin x) x) id)) => ((set (mul (rat {neg1}) (cos x)) id))
-        },
+        }.0,
         define_rule! {
             [egraph] ((-> (integral (add f g) x) id)) => ((set (add (integral f x) (integral g x)) id))
-        },
+        }.0,
         define_rule! {
             [egraph] ((-> (integral (sub f g) x) id)) => ((set (sub (integral f x) (integral g x)) id))
-        },
+        }.0,
         define_rule! {
             [egraph] ((-> (integral (mul a b) x) id))
             => ((set (sub (mul a (integral b x))
                           (integral (mul (diff x a) (integral b x)) x)) id))
-        },
+        }.0,
     ];
 
     {
@@ -644,7 +644,7 @@ fn container_test() {
         (vec_table, vec![vec1, vec1_id]),
     ]);
 
-    let vec_expand = {
+    let (vec_expand, _, _) = {
         let mut rb = egraph.new_rule("", true);
         let vec = rb.new_var(ColumnTy::Id);
         let vec_id = rb.new_var(ColumnTy::Id);
@@ -692,7 +692,7 @@ fn container_test() {
         rb.build()
     };
 
-    let eval_add = {
+    let (eval_add, _, _) = {
         let mut rb = egraph.new_rule("", true);
         let lhs_raw = rb.new_var(ColumnTy::Base(int_base));
         let lhs_id = rb.new_var(ColumnTy::Id);
@@ -779,7 +779,7 @@ fn rhs_only_rule() {
         name: "num".into(),
         can_subsume: false,
     });
-    let add_data = {
+    let (add_data, _, _) = {
         let zero = egraph.base_value_constant(0i64);
         let one = egraph.base_value_constant(1i64);
         let mut rb = egraph.new_rule("", true);
@@ -813,7 +813,7 @@ fn rhs_only_rule_only_runs_once() {
         inner.fetch_add(1, Ordering::SeqCst);
         Some(Value::new(0))
     }));
-    let inc_counter_rule = {
+    let (inc_counter_rule, _, _) = {
         let mut rb = egraph.new_rule("", true);
         rb.call_external_func(inc_counter_func, &[], ColumnTy::Id, || "".to_string());
         rb.build()
@@ -882,7 +882,7 @@ fn mergefn_arithmetic() {
     let value_6 = egraph.base_value_constant(6i64);
 
     // First rule writes (f 1 0) (f 2 1)
-    let rule1 = {
+    let (rule1, _, _) = {
         let mut rb = egraph.new_rule("rule1", true);
         rb.set(f_table, &[value_1.clone(), value_0]);
         rb.set(f_table, &[value_2.clone(), value_1.clone()]);
@@ -903,7 +903,7 @@ fn mergefn_arithmetic() {
     assert_eq!(contents, vec![(1, 0), (2, 1)]);
 
     // Second rule writes (f 1 5) (f 2 6)
-    let rule2 = {
+    let (rule2, _, _) = {
         let mut rb = egraph.new_rule("rule2", true);
         rb.set(f_table, &[value_1.clone(), value_5]);
         rb.set(f_table, &[value_2.clone(), value_6]);
@@ -926,7 +926,7 @@ fn mergefn_arithmetic() {
     assert_eq!(contents, vec![(1, 1), (2, 7)]);
 
     // Third rule writes (f 1 3) (f 2 4)
-    let rule3 = {
+    let (rule3, _, _) = {
         let mut rb = egraph.new_rule("rule3", true);
         rb.set(f_table, &[value_1, value_3]);
         rb.set(f_table, &[value_2, value_4]);
@@ -985,7 +985,7 @@ fn mergefn_nested_function() {
     // Create an rhs-only rule that writes f values with fresh IDs
     // We'll run this rule multiple times and observe how the merge function works
 
-    let write_rule = {
+    let (write_rule, _, _) = {
         let mut rb = egraph.new_rule("write_rule", true);
         rb.lookup(f_table, slice::from_ref(&value_1), String::new);
         rb.lookup(f_table, &[value_2], String::new);
@@ -1027,7 +1027,7 @@ fn mergefn_nested_function() {
     // After first run, there should be no g entries yet because no merging occurred
     assert_eq!(g_entries_1.len(), 0);
 
-    let set_rule = {
+    let (set_rule, _, _) = {
         let mut rb = egraph.new_rule("iterate", true);
         rb.set(
             f_table,
@@ -1107,7 +1107,7 @@ fn constrain_prims_simple() {
     let value_2 = egraph.base_value_constant(2i64);
     let value_3 = egraph.base_value_constant(3i64);
     let value_true = egraph.base_value_constant(true);
-    let write_f = {
+    let (write_f, _, _) = {
         let mut rb = egraph.new_rule("write_f", true);
         rb.lookup(f_table, &[value_1], String::new);
         rb.lookup(f_table, &[value_2], String::new);
@@ -1115,7 +1115,7 @@ fn constrain_prims_simple() {
         rb.build()
     };
 
-    let copy_to_g = {
+    let (copy_to_g, _, _) = {
         let mut rb = egraph.new_rule("copy_to_g", true);
         let val = rb.new_var(ColumnTy::Base(int_base));
         let id = rb.new_var(ColumnTy::Id);
@@ -1197,7 +1197,7 @@ fn constrain_prims_abstract() {
     let value_n1 = egraph.base_value_constant(-1i64);
     let value_0 = egraph.base_value_constant(0i64);
     let value_1 = egraph.base_value_constant(1i64);
-    let write_f = {
+    let (write_f, _, _) = {
         let mut rb = egraph.new_rule("write_f", true);
         rb.lookup(f_table, &[value_n1], String::new);
         rb.lookup(f_table, &[value_0], String::new);
@@ -1205,7 +1205,7 @@ fn constrain_prims_abstract() {
         rb.build()
     };
 
-    let copy_to_g = {
+    let (copy_to_g, _, _) = {
         let mut rb = egraph.new_rule("copy_to_g", true);
         let val = rb.new_var(ColumnTy::Base(int_base));
         let id = rb.new_var(ColumnTy::Id);
@@ -1267,21 +1267,21 @@ fn basic_subsumption() {
     let value_1 = egraph.base_value_constant(1i64);
     let value_2 = egraph.base_value_constant(2i64);
     let value_3 = egraph.base_value_constant(3i64);
-    let write_f = {
+    let (write_f, _, _) = {
         let mut rb = egraph.new_rule("write_f", true);
         rb.lookup(f_table, slice::from_ref(&value_1), String::new);
         rb.lookup(f_table, slice::from_ref(&value_2), String::new);
         rb.build()
     };
 
-    let subsume_f = {
+    let (subsume_f, _, _) = {
         let mut rb = egraph.new_rule("write_f", true);
         rb.subsume(f_table, slice::from_ref(&value_2));
         rb.subsume(f_table, slice::from_ref(&value_3));
         rb.build()
     };
 
-    let copy_to_g = {
+    let (copy_to_g, _, _) = {
         let mut rb = egraph.new_rule("copy_to_g", true);
         let val = rb.new_var(ColumnTy::Base(int_base));
         let id = rb.new_var(ColumnTy::Id);
@@ -1344,7 +1344,7 @@ fn lookup_failure_panics() {
     let value_1 = to_entry(1);
     let value_2 = to_entry(2);
     let value_3 = to_entry(3);
-    let write_f = {
+    let (write_f, _, _) = {
         let mut rb = egraph.new_rule("write_f", true);
         rb.set(f, &[value_1.clone(), value_1.clone()]);
         rb.set(f, &[value_2.clone(), value_2.clone()]);
@@ -1352,14 +1352,14 @@ fn lookup_failure_panics() {
     };
     egraph.run_rules(&[write_f]).unwrap();
 
-    let lookup_success = {
+    let (lookup_success, _, _) = {
         let mut rb = egraph.new_rule("lookup_success", true);
         rb.lookup(f, slice::from_ref(&value_1), String::new);
         rb.build()
     };
     egraph.run_rules(&[lookup_success]).unwrap();
 
-    let lookup_failure = {
+    let (lookup_failure, _, _) = {
         let mut rb = egraph.new_rule("lookup_fail", true);
         rb.lookup(f, slice::from_ref(&value_3), String::new);
         rb.build()
@@ -1390,7 +1390,7 @@ fn primitive_failure_panics() {
         },
     ));
 
-    let assert_odd_rule = {
+    let (assert_odd_rule, _, _) = {
         let mut rb = egraph.new_rule("assert_odd", true);
         rb.call_external_func(
             assert_odd,

@@ -178,7 +178,7 @@ macro_rules! define_rule {
         let mut builder = $egraph.new_rule(stringify!(($($lhs)* => $($rhs)*)), true);
         $crate::parse_lhs!(ebuilder, builder, [ $($lhs)* ]);
         $crate::parse_rhs_command!(ebuilder, builder, [ $($rhs)* ]);
-        builder.build_with_syntax(ebuilder.syntax)
+        builder.build_with_syntax(&ebuilder.syntax)
     }};
 }
 

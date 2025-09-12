@@ -16,12 +16,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::proof_spec::ProofBuilder;
 use core_relations::{
     BaseValue, BaseValueId, BaseValues, ColumnId, Constraint, ContainerValue, ContainerValues,
     CounterId, Database, DisplacedTable, DisplacedTableWithProvenance, ExecutionState,
     ExternalFunction, ExternalFunctionId, MergeVal, Offset, PlanStrategy, ProofEdge, RuleSetReport,
     SortedWritesTable, TableId, TaggedRowBuffer, Value, WrappedTable,
 };
+use dyn_clone::{clone_trait_object, DynClone};
 use hashbrown::HashMap;
 use indexmap::{map::Entry, IndexMap, IndexSet};
 use log::info;
@@ -29,11 +31,12 @@ use numeric_id::{define_id, DenseIdMap, DenseIdMapWithReuse, IdVec, NumericId};
 use once_cell::sync::Lazy;
 use petgraph::Graph;
 pub use proof_format::{EqProofId, ProofStore, TermProofId};
-use proof_spec::{ProofReason, ProofReconstructionState, ReasonSpecId};
+use proof_spec::{ProofReason, ProofReconstructionState};
 use smallvec::SmallVec;
 use web_time::{Duration, Instant};
 
 pub mod macros;
+pub use proof_spec::ReasonSpecId;
 pub mod proof_format;
 pub(crate) mod proof_spec;
 pub(crate) mod rule;
@@ -124,6 +127,9 @@ impl EGraph {
             iter::empty(),
         );
         EGraph::create_internal(db, uf_table, true)
+    }
+    pub fn tracing(&self) -> bool {
+        self.tracing
     }
 
     fn create_internal(mut db: Database, uf_table: TableId, tracing: bool) -> EGraph {
@@ -258,7 +264,7 @@ impl EGraph {
         }
     }
 
-    fn term_table(&mut self, table: TableId) -> TableId {
+    pub fn term_table(&mut self, table: TableId) -> TableId {
         let spec = self.db.get_table(table).spec();
         match self.term_tables.entry(spec.n_keys) {
             Entry::Occupied(o) => *o.get(),
@@ -292,6 +298,10 @@ impl EGraph {
                 *v.insert(table_id)
             }
         }
+    }
+    pub fn reason_spec_id_to_reason_table(&mut self, spec: ReasonSpecId) -> TableId {
+        let spec = self.proof_specs[spec].clone();
+        self.reason_table(&spec)
     }
 
     /// Load the given values into the database.
@@ -369,6 +379,11 @@ impl EGraph {
             self.db.merge_table(term_table_id);
             result
         }
+    }
+
+    pub fn get_term_row_insert_fn(&mut self, func: FunctionId) -> Option<TermRowInsert> {
+        self.tracing
+            .then(|| ProofBuilder::new_term_row_table_action(func, self))
     }
 
     /// Lookup the id associated with a function `func` and the given arguments
@@ -492,6 +507,7 @@ impl EGraph {
     /// This method may panic if `key` does not match the arity of the function,
     /// or is otherwise malformed.
     pub fn explain_term(&mut self, id: Value, store: &mut ProofStore) -> Result<TermProofId> {
+        info!("explain term {:?}", id);
         if !self.tracing {
             return Err(ProofReconstructionError::TracingNotEnabled.into());
         }
@@ -511,6 +527,7 @@ impl EGraph {
         id2: Value,
         store: &mut ProofStore,
     ) -> Result<EqProofId> {
+        info!("explain term eq {:?} {:?}", id1, id2);
         if !self.tracing {
             return Err(ProofReconstructionError::TracingNotEnabled.into());
         }
@@ -1019,7 +1036,7 @@ impl EGraph {
 
         // Remove the old row and insert the new one.
         rb.rebuild_row(table, &vars, &canon, subsume_var);
-        rb.build_internal(Some(SourceSyntax::default()))
+        rb.build_internal(Some(&SourceSyntax::default())).0
     }
 
     fn nonincremental_rebuild(&mut self, table: FunctionId, schema: &[ColumnTy]) -> RuleId {
@@ -1053,7 +1070,7 @@ impl EGraph {
         }
         rb.check_for_update(&lhs, &rhs).unwrap();
         rb.rebuild_row(table, &vars, &canon, subsume_var);
-        rb.build_internal(Some(SourceSyntax::default())) // skip the syntax check
+        rb.build_internal(Some(&SourceSyntax::default())).0 // skip the syntax check
     }
 
     /// Gives the user a handle to the underlying ExecutionState. Useful for staging updates
@@ -1352,7 +1369,8 @@ impl ResolvedMergeFn {
                     .map(|arg| arg.run(state, cur, new, ts))
                     .collect::<Vec<_>>();
 
-                func.lookup(state, &args).unwrap_or_else(|| {
+                // todo
+                func.lookup(state, &args, None).unwrap_or_else(|| {
                     let res = state.call_external_func(*panic, &[]);
                     assert_eq!(res, None);
                     cur
@@ -1373,6 +1391,16 @@ pub struct TableAction {
     timestamp: CounterId,
     scratch: Vec<Value>,
 }
+pub trait Tri:
+    Fn(&mut ExecutionState, &[Value], Value) -> Value + DynClone + 'static + Send + Sync
+{
+}
+impl<T> Tri for T where
+    T: Fn(&mut ExecutionState, &[Value], Value) -> Value + DynClone + 'static + Send + Sync
+{
+}
+clone_trait_object!(Tri);
+pub type TermRowInsert = Box<dyn Tri>;
 
 impl Clone for TableAction {
     fn clone(&self) -> Self {
@@ -1390,8 +1418,6 @@ impl TableAction {
     /// Create a new `TableAction` to be used later.
     /// This requires access to the `egglog_bridge::EGraph`.
     pub fn new(egraph: &EGraph, func: FunctionId) -> TableAction {
-        assert!(!egraph.tracing, "proofs not supported yet");
-
         let func_info = &egraph.funcs[func];
         TableAction {
             table: func_info.table,
@@ -1409,16 +1435,45 @@ impl TableAction {
             scratch: Vec::new(),
         }
     }
+    pub fn query_reason(
+        reason_table: TableId,
+        reason_spec_id: ReasonSpecId,
+        state: &mut ExecutionState,
+        input: &[Value],
+    ) -> Value {
+        let mut v: Vec<Value> = Vec::new();
+        info!("reason table is {:?}", reason_table);
+        info!("reason spec id is {:?}", reason_spec_id);
+        v.push(Value::from_usize(reason_spec_id.index()));
+        v.extend_from_slice(input);
+        info!("keys is {:?}", v);
+        let reason_row = state.predict_val(reason_table, &v, iter::empty());
+        info!("reason row is {:?}", reason_row);
+        let reason = state.predict_col(
+            reason_table,
+            &v,
+            iter::empty(),
+            ColumnId::from_usize(input.len() + 1),
+        );
+        info!("reason is {:?}", reason);
+        reason
+    }
 
     /// A "table lookup" is not a read-only operation. It will insert a row when
     /// the [`DefaultVal`] for the table is not [`DefaultVal::Fail`] and
     /// the `args` in [`Lookup::run`] are not already present in the table.
-    pub fn lookup(&self, state: &mut ExecutionState, key: &[Value]) -> Option<Value> {
+    pub fn lookup(
+        &self,
+        state: &mut ExecutionState,
+        key: &[Value],
+        term_id: Option<Value>,
+    ) -> Option<Value> {
         match self.default {
             Some(default) => {
                 let timestamp =
                     MergeVal::Constant(Value::from_usize(state.read_counter(self.timestamp)));
                 let mut merge_vals = SmallVec::<[MergeVal; 3]>::new();
+                let term_id = term_id.map(|x| MergeVal::Constant(x));
                 SchemaMath {
                     func_cols: 1,
                     ..self.table_math
@@ -1427,12 +1482,12 @@ impl TableAction {
                     &mut merge_vals,
                     RowVals {
                         timestamp,
-                        proof: None,
+                        proof: term_id,
                         subsume: self
                             .table_math
                             .subsume
                             .then_some(MergeVal::Constant(NOT_SUBSUMED)),
-                        ret_val: Some(default),
+                        ret_val: term_id.or(Some(default)),
                     },
                 );
                 Some(
@@ -1448,7 +1503,12 @@ impl TableAction {
     }
 
     /// Insert a row into this table.
-    pub fn insert(&mut self, state: &mut ExecutionState, row: impl Iterator<Item = Value>) {
+    pub fn insert(
+        &mut self,
+        state: &mut ExecutionState,
+        row: impl Iterator<Item = Value>,
+        term_id: Option<Value>,
+    ) {
         let ts = Value::from_usize(state.read_counter(self.timestamp));
         self.scratch.clear();
         self.scratch.extend(row);
@@ -1456,7 +1516,7 @@ impl TableAction {
             &mut self.scratch,
             RowVals {
                 timestamp: ts,
-                proof: None,
+                proof: term_id,
                 subsume: self.table_math.subsume.then_some(NOT_SUBSUMED),
                 ret_val: None,
             },
@@ -1470,13 +1530,18 @@ impl TableAction {
     }
 
     /// Subsume a row in this table.
-    pub fn subsume(&mut self, state: &mut ExecutionState, key: impl Iterator<Item = Value>) {
+    pub fn subsume(
+        &mut self,
+        state: &mut ExecutionState,
+        key: impl Iterator<Item = Value>,
+        term_id: Option<Value>,
+    ) {
         let ts = Value::from_usize(state.read_counter(self.timestamp));
         self.scratch.clear();
         self.scratch.extend(key);
 
         let ret_val = self
-            .lookup(state, &self.scratch)
+            .lookup(state, &self.scratch, term_id)
             .expect("subsume lookup failed");
 
         self.table_math.write_table_row(
@@ -1503,7 +1568,6 @@ impl UnionAction {
     /// Create a new `UnionAction` to be used later.
     /// This requires access to the `egglog_bridge::EGraph`.
     pub fn new(egraph: &EGraph) -> UnionAction {
-        assert!(!egraph.tracing, "proofs not supported yet");
         UnionAction {
             table: egraph.uf_table,
             timestamp: egraph.timestamp_counter,
@@ -1511,9 +1575,13 @@ impl UnionAction {
     }
 
     /// Union two values.
-    pub fn union(&self, state: &mut ExecutionState, x: Value, y: Value) {
+    pub fn union(&self, state: &mut ExecutionState, x: Value, y: Value, proof: Option<Value>) {
         let ts = Value::from_usize(state.read_counter(self.timestamp));
-        state.stage_insert(self.table, &[x, y, ts]);
+        if let Some(reason) = proof {
+            state.stage_insert(self.table, &[x, y, ts, reason])
+        } else {
+            state.stage_insert(self.table, &[x, y, ts])
+        }
     }
 }
 

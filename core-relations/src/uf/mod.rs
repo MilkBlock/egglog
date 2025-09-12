@@ -530,7 +530,7 @@ pub struct DisplacedTableWithProvenance {
     buffered_writes: Arc<SegQueue<RowBuffer>>,
 }
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct ProofEdge {
     reason: ProofReason,
     ts: Value,

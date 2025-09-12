@@ -64,6 +64,7 @@ mimalloc = "0.1.46"
 core-relations = { path = "core-relations" }
 egglog-bridge = { path = "egglog-bridge" }
 numeric-id = { path = "numeric-id" }
+itertools = "0.14.0"
 
 [build-dependencies]
 chrono = { version = "0.4", default-features = false, features = [

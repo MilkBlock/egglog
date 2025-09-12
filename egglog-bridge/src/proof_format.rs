@@ -43,7 +43,7 @@ impl<K: NumericId, T: Clone + Eq + Hash> HashCons<K, T> {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct TermDag {
     store: HashCons<TermId, Term>,
 }
@@ -137,7 +137,7 @@ pub enum Term {
 pub struct ProofStore {
     eq_memo: HashCons<EqProofId, EqProof>,
     term_memo: HashCons<TermProofId, TermProof>,
-    pub(crate) termdag: TermDag,
+    pub termdag: TermDag,
 }
 
 impl ProofStore {
@@ -307,6 +307,12 @@ impl ProofStore {
         writer: &mut impl io::Write,
     ) -> io::Result<()> {
         self.print_term_proof_pretty(term_pf, &PrettyPrintConfig::default(), writer)
+    }
+    pub fn term_lookup(&self, pf: TermProofId) -> Option<&TermProof> {
+        self.term_memo.lookup(pf)
+    }
+    pub fn eq_lookup(&self, pf: EqProofId) -> Option<&EqProof> {
+        self.eq_memo.lookup(pf)
     }
 
     fn print_term_proof_with_printer<W: io::Write>(

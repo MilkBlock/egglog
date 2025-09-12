@@ -1,10 +1,15 @@
-use std::{iter, rc::Rc, sync::Arc};
+use std::{
+    iter::{self},
+    rc::Rc,
+    sync::Arc,
+};
 
 use core_relations::{
-    BaseValuePrinter, ColumnId, DisplacedTableWithProvenance, ProofReason as UfProofReason,
-    ProofStep, RuleBuilder, Value,
+    BaseValuePrinter, ColumnId, DisplacedTableWithProvenance, ExecutionState, MergeVal,
+    ProofReason as UfProofReason, ProofStep, RuleBuilder, Value,
 };
 use hashbrown::{HashMap, HashSet};
+use log::info;
 use numeric_id::{define_id, DenseIdMap, NumericId};
 
 use crate::{
@@ -14,10 +19,10 @@ use crate::{
     rule::{AtomId, Bindings, DstVar, Variable},
     syntax::{RuleData, SourceSyntax, SyntaxId},
     ColumnTy, EGraph, FunctionId, GetFirstMatch, QueryEntry, Result, RuleId, SideChannel,
-    SourceExpr, TopLevelLhsExpr,
+    SourceExpr, TermRowInsert, TopLevelLhsExpr,
 };
 
-define_id!(pub(crate) ReasonSpecId, u32, "A unique identifier for the step in a proof.");
+define_id!(pub ReasonSpecId, u32, "A unique identifier for the step in a proof.");
 
 /// Reasons provide extra provenance information accompanying a term being
 /// instantiated, or marked as equal to another term. All reasons are pointed
@@ -127,14 +132,44 @@ impl ProofBuilder {
                 .expect("must have a reason variable for new rows");
             let mut translated = Vec::new();
             translated.push(func_val.into());
+            // 1. func_val
             for entry in &entries[0..entries.len() - 1] {
+                // 2. entries
                 translated.push(inner.convert(entry));
             }
+            // 3. term_var
             translated.push(inner.mapping[term_var]);
+            // 4. reason_var
             translated.push(reason_var);
             rb.insert(term_table, &translated)?;
             Ok(())
         }
+    }
+
+    /// TableAction version of new_row.
+    /// Generate a callback that will add a row to the term database, as well as
+    /// a reason for that term existing.
+    pub(crate) fn new_term_row_table_action(func: FunctionId, db: &mut EGraph) -> TermRowInsert {
+        let func_table = db.funcs[func].table;
+        let term_table = db.term_table(func_table);
+        let term_counter = db.id_counter;
+        let func_val = Value::new(func.rep());
+        Box::new(
+            move |state: &mut ExecutionState<'_>, args: &[Value], proof: Value| {
+                let mut key = Vec::with_capacity(args.len() + 1);
+                key.push(func_val);
+                key.extend_from_slice(args);
+                let mut vals = Vec::with_capacity(args.len() + 1);
+                vals.push(MergeVal::Counter(term_counter));
+                vals.push(MergeVal::Constant(proof));
+                state.predict_col(
+                    term_table,
+                    &key,
+                    vals.into_iter(),
+                    ColumnId::from_usize(args.len() + 1),
+                )
+            },
+        )
     }
 }
 
@@ -200,6 +235,7 @@ impl EGraph {
         res
     }
 
+    /// vars is the value of term_id in TermTable which is used to reconstruct_term
     fn rule_proof(
         &mut self,
         RuleData { syntax, .. }: &RuleData,
@@ -207,6 +243,7 @@ impl EGraph {
         state: &mut ProofReconstructionState,
     ) -> (DenseIdMap<Variable, TermId>, Vec<Premise>) {
         // First, reconstruct terms for all the relevant variables.
+        info!("rule_proof {:?}", vars);
         let mut subst_term = DenseIdMap::<Variable, TermId>::new();
         let mut subst_val = DenseIdMap::<Variable, Value>::new();
         for ((var, ty), term_id) in syntax.vars.iter().zip(vars) {
@@ -220,6 +257,7 @@ impl EGraph {
             match toplevel {
                 TopLevelLhsExpr::Exists(id) => {
                     let val = self.get_syntax_val(*id, syntax, &subst_val, &mut terms);
+                    info!("found exist {:?}", toplevel);
                     premises.push(Premise::TermOk(self.explain_term_inner(val, state)));
                 }
                 TopLevelLhsExpr::Eq(id1, id2) => {
@@ -237,6 +275,7 @@ impl EGraph {
         term_id: Value,
         state: &mut ProofReconstructionState,
     ) -> TermProofId {
+        info!("explain term inner {:?}", term_id);
         if let Some(prev) = state.term_prf_memo.get(&term_id) {
             return *prev;
         }
@@ -255,7 +294,11 @@ impl EGraph {
                 let (subst, body_pfs) = self.rule_proof(data, &reason_row[1..], state);
                 let result = self.reconstruct_term(term_id, ColumnTy::Id, state);
                 state.store.intern_term(&TermProof::PRule {
-                    rule_name: String::from(&*self.rules[data.rule_id].desc).into(),
+                    rule_name: String::from(&*self.rules.data.get(data.rule_id).map_or_else(
+                        || "not found rule might be fiat".to_string(),
+                        |x| x.desc.to_string(),
+                    ))
+                    .into(),
                     subst,
                     body_pfs,
                     result,

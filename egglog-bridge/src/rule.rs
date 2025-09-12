@@ -12,11 +12,12 @@ use core_relations::{
     RuleBuilder as CoreRuleBuilder, RuleSetBuilder, TableId, Value, WriteVal,
 };
 use hashbrown::HashSet;
-use log::debug;
+use log::{debug, info};
 use numeric_id::{define_id, DenseIdMap, NumericId};
 use smallvec::SmallVec;
 use thiserror::Error;
 
+use crate::proof_spec::ReasonSpecId;
 use crate::syntax::SourceSyntax;
 use crate::{
     proof_spec::{ProofBuilder, RebuildVars},
@@ -275,40 +276,43 @@ impl RuleBuilder<'_> {
     }
 
     /// Register the given rule with the egraph.
-    pub fn build(self) -> RuleId {
-        // assert!(
-        //     !self.egraph.tracing,
-        //     "proofs are enabled: use `build_with_syntax` instead"
-        // );
-        if !self.egraph.tracing {
-            self.build_internal(None)
-        } else {
-            self.build_internal(Some(SourceSyntax::default()))
-        }
+    pub fn build(self) -> (RuleId, Option<SourceSyntax>, Option<ReasonSpecId>) {
+        assert!(
+            !self.egraph.tracing,
+            "proofs are enabled: use `build_with_syntax` instead"
+        );
+        self.build_internal(None)
     }
 
-    pub fn build_with_syntax(self, syntax: SourceSyntax) -> RuleId {
+    pub fn build_with_syntax(
+        self,
+        syntax: &SourceSyntax,
+    ) -> (RuleId, Option<SourceSyntax>, Option<ReasonSpecId>) {
         self.build_internal(Some(syntax))
     }
 
-    pub(crate) fn build_internal(mut self, syntax: Option<SourceSyntax>) -> RuleId {
+    pub(crate) fn build_internal(
+        mut self,
+        syntax: Option<&SourceSyntax>,
+    ) -> (RuleId, Option<SourceSyntax>, Option<ReasonSpecId>) {
         if self.query.atoms.len() == 1 {
             self.query.plan_strategy = PlanStrategy::MinCover;
         }
-        if let Some(syntax) = &syntax {
-            if self.egraph.tracing {
-                let cb = self
+        let reason_spec_id = match (syntax, self.egraph.tracing) {
+            (Some(syntax), true) => {
+                let (cb, reason_spec_id) = self
                     .proof_builder
                     .create_reason(syntax.clone(), self.egraph);
+                info!("build reason instr generated for {:?}", syntax);
                 self.query.build_reason = Some(Box::new(move |bndgs, rb| {
                     let reason = cb(bndgs, rb)?;
                     bndgs.lhs_reason = Some(reason.into());
                     Ok(())
                 }));
+                Some(reason_spec_id)
             }
-        } else {
-            panic!("ppppppppppp");
-        }
+            _ => None,
+        };
         let res = self.query.rule_id;
         let info = RuleInfo {
             last_run_at: Timestamp::new(0),
@@ -318,7 +322,7 @@ impl RuleBuilder<'_> {
         };
         debug!("created rule {res:?} / {}", info.desc);
         self.egraph.rules.insert(res, info);
-        res
+        (res, syntax.cloned(), reason_spec_id)
     }
 
     pub(crate) fn set_focus(&mut self, focus: usize) {
