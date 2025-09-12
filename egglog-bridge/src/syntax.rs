@@ -104,19 +104,6 @@ impl SourceSyntax {
             }
         })
     }
-    fn map_vars_to_name(
-        &self,
-        map: &std::collections::HashMap<Variable, String>,
-        type_info: &std::collections::HashMap<ColumnTy, String>,
-    ) -> indexmap::IndexSet<(String, String)> {
-        let mut index_set = indexmap::IndexSet::default();
-        for (var, column_ty) in &self.vars {
-            let var_name = map.get(var).unwrap();
-            let ty_name = type_info.get(column_ty).unwrap();
-            index_set.insert((var_name.clone(), ty_name.clone()));
-        }
-        index_set
-    }
 }
 
 /// The data associated with a proof of a given term whose premises are given by a
