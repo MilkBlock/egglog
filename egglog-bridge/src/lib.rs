@@ -30,6 +30,7 @@ use log::info;
 use numeric_id::{define_id, DenseIdMap, DenseIdMapWithReuse, IdVec, NumericId};
 use once_cell::sync::Lazy;
 use petgraph::Graph;
+pub use proof_format::PrettyPrintConfig;
 pub use proof_format::{EqProofId, ProofStore, TermProofId};
 use proof_spec::{ProofReason, ProofReconstructionState};
 use smallvec::SmallVec;

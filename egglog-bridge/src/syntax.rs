@@ -69,7 +69,7 @@ pub enum SourceExpr {
 #[derive(Debug, Clone, Default)]
 pub struct SourceSyntax {
     pub(crate) backing: IdVec<SyntaxId, SourceExpr>,
-    pub(crate) vars: Vec<(Variable, ColumnTy)>,
+    pub(crate) vars: Vec<(Variable, ColumnTy, Option<String>)>,
     pub(crate) roots: Vec<TopLevelLhsExpr>,
 }
 
@@ -81,11 +81,11 @@ impl SourceSyntax {
     pub fn add_expr(&mut self, expr: SourceExpr) -> SyntaxId {
         match &expr {
             SourceExpr::Const { .. } | SourceExpr::FunctionCall { .. } => {}
-            SourceExpr::Var { id, ty, .. } => {
+            SourceExpr::Var { id, ty, name } => {
                 info!("add variable {:?} {:?}", id, ty);
-                self.vars.push((*id, *ty))
+                self.vars.push((*id, *ty, Some(name.clone())))
             }
-            SourceExpr::ExternalCall { var, ty, .. } => self.vars.push((*var, *ty)),
+            SourceExpr::ExternalCall { var, ty, .. } => self.vars.push((*var, *ty, None)),
         };
         self.backing.push(expr)
     }
@@ -181,7 +181,7 @@ impl ProofBuilder {
                 let mut row = SmallVec::<[core_relations::QueryEntry; 8]>::new();
                 row.push(Value::new(reason_spec_id.rep()).into());
                 // 先是 reason id 其次就是所有的 syntax.vars 所以我
-                for (var, _) in &syntax.vars {
+                for (var, _, _) in &syntax.vars {
                     row.push(bndgs.mapping[*var]);
                 }
                 Ok(rb.lookup_or_insert(

@@ -246,7 +246,7 @@ impl EGraph {
         info!("rule_proof {:?}", vars);
         let mut subst_term = DenseIdMap::<Variable, TermId>::new();
         let mut subst_val = DenseIdMap::<Variable, Value>::new();
-        for ((var, ty), term_id) in syntax.vars.iter().zip(vars) {
+        for ((var, ty, _name), term_id) in syntax.vars.iter().zip(vars) {
             subst_val.insert(*var, *term_id);
             let term = self.reconstruct_term(*term_id, *ty, state);
             subst_term.insert(*var, term);
@@ -299,6 +299,15 @@ impl EGraph {
         let spec = self.proof_specs[ReasonSpecId::new(reason_row[0].rep())].clone();
         let res = match &*spec {
             ProofReason::Rule(data) => {
+                let name_subst = {
+                    let mut map = DenseIdMap::default();
+                    for id in data.syntax.vars.iter() {
+                        if let Some(name) = &id.2 {
+                            map.insert(id.0, name.clone());
+                        }
+                    }
+                    map
+                };
                 let (subst, body_pfs) = self.rule_proof(data, &reason_row[1..], state);
                 let result = self.reconstruct_term(term_id, ColumnTy::Id, state);
                 state.store.intern_term(&TermProof::PRule {
@@ -310,6 +319,7 @@ impl EGraph {
                     subst,
                     body_pfs,
                     result,
+                    name_subst,
                 })
             }
             ProofReason::CongRow => {
@@ -352,10 +362,12 @@ impl EGraph {
                 for (ty, entry) in schema[0..schema.len() - 1].iter().zip(term_row[1..].iter()) {
                     args.push(self.reconstruct_term(*entry, *ty, state));
                 }
-                state
-                    .store
-                    .termdag
-                    .get_or_insert(&Term::Func { id: func, args })
+                state.store.termdag.get_or_insert(&Term::Func {
+                    id: func,
+                    args,
+                    func_id_rendered: self.funcs[func].name.clone(),
+                    value: term_row[term_row.len() - 2],
+                })
             }
             ColumnTy::Base(ty) => {
                 let rendered: Rc<str> = format!(
@@ -489,6 +501,15 @@ impl EGraph {
         let spec = self.proof_specs[ReasonSpecId::new(reason_row[0].rep())].clone();
         match &*spec {
             ProofReason::Rule(data) => {
+                let name_subst = {
+                    let mut map = DenseIdMap::default();
+                    for id in data.syntax.vars.iter() {
+                        if let Some(name) = &id.2 {
+                            map.insert(id.0, name.clone());
+                        }
+                    }
+                    map
+                };
                 let (subst, body_pfs) = self.rule_proof(data, &reason_row[1..], state);
                 let l_term = self.reconstruct_term(l, ColumnTy::Id, state);
                 let r_term = self.reconstruct_term(r, ColumnTy::Id, state);
@@ -499,6 +520,7 @@ impl EGraph {
                     body_pfs,
                     result_lhs: l_term,
                     result_rhs: r_term,
+                    name_subst,
                 })
             }
             ProofReason::CongRow => {

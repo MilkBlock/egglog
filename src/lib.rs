@@ -39,6 +39,7 @@ pub use core_relations::{
     BaseValue, ContainerValue, ExecutionState, RuleBuilder, RuleSetBuilder, Value,
 };
 pub use egglog_bridge::FunctionRow;
+pub use egglog_bridge::PrettyPrintConfig;
 use egglog_bridge::{
     ColumnTy, IterationReport, QueryEntry, ReasonSpecId, SourceExpr, SourceSyntax, TopLevelLhsExpr,
 };

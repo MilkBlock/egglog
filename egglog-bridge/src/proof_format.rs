@@ -1,8 +1,9 @@
 //! A proof format for egglog programs, based on the Rocq format and checker from Tia Vu, Ryan
 //! Doegens, and Oliver Flatt.
-use std::{hash::Hash, io, rc::Rc};
+use std::{hash::Hash, io, rc::Rc, sync::Arc};
 
 use core_relations::Value;
+use hashbrown::HashMap;
 use indexmap::IndexSet;
 use numeric_id::{define_id, DenseIdMap, NumericId};
 
@@ -43,7 +44,7 @@ impl<K: NumericId, T: Clone + Eq + Hash> HashCons<K, T> {
     }
 }
 
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone)]
 pub struct TermDag {
     store: HashCons<TermId, Term>,
 }
@@ -74,13 +75,18 @@ impl TermDag {
         match term {
             Term::Constant { id, rendered } => {
                 if let Some(rendered) = rendered {
-                    printer.write_str(rendered)?;
+                    printer.write_str(&format!("[{}]{}", id.rep(), rendered))?;
                 } else {
                     printer.write_str(&format!("c{}", id.index()))?;
                 }
             }
-            Term::Func { id, args } => {
-                printer.write_str(&format!("({id:?}"))?;
+            Term::Func {
+                id: _id,
+                args,
+                func_id_rendered,
+                value,
+            } => {
+                printer.write_str(&format!("([{}]{func_id_rendered}", value.rep()))?;
                 if !args.is_empty() {
                     printer.increase_indent();
                     for (i, arg) in args.iter().enumerate() {
@@ -129,6 +135,8 @@ pub enum Term {
     Func {
         id: FunctionId,
         args: Vec<TermId>,
+        func_id_rendered: Arc<str>,
+        value: Value,
     },
 }
 
@@ -216,6 +224,7 @@ impl ProofStore {
                 body_pfs,
                 result_lhs,
                 result_rhs,
+                name_subst,
             } => {
                 printer.write_str(&format!("PRule[Equality]({rule_name:?}, Subst {{"))?;
                 printer.increase_indent();
@@ -225,7 +234,12 @@ impl ProofStore {
                         printer.write_str(",")?;
                     }
                     printer.write_with_break(" ")?;
-                    printer.write_str(&format!("{var:?} => "))?;
+                    let var = if let Some(name) = name_subst.get(var) {
+                        format!("{name}")
+                    } else {
+                        format!("{var:?}")
+                    };
+                    printer.write_str(&format!("{var} => "))?;
                     self.termdag.print_term_with_printer(*term, printer)?;
                     printer.newline()?;
                 }
@@ -327,6 +341,7 @@ impl ProofStore {
                 subst,
                 body_pfs,
                 result,
+                name_subst,
             } => {
                 printer.write_str(&format!("PRule[Existence]({rule_name:?}, Subst {{"))?;
                 printer.increase_indent();
@@ -336,7 +351,12 @@ impl ProofStore {
                         printer.write_str(",")?;
                     }
                     printer.write_with_break(" ")?;
-                    printer.write_str(&format!("{var:?} => "))?;
+                    let var = if let Some(name) = name_subst.get(var) {
+                        format!("{name}")
+                    } else {
+                        format!("{var:?}")
+                    };
+                    printer.write_str(&format!("{var} => "))?;
                     self.termdag.print_term_with_printer(*term, printer)?;
                     printer.newline()?;
                 }
@@ -451,6 +471,7 @@ pub enum TermProof {
     PRule {
         rule_name: Rc<str>,
         subst: DenseIdMap<Variable, TermId>,
+        name_subst: DenseIdMap<Variable, String>,
         body_pfs: Vec<Premise>,
         result: TermId,
     },
@@ -476,6 +497,7 @@ pub enum EqProof {
     PRule {
         rule_name: Rc<str>,
         subst: DenseIdMap<Variable, TermId>,
+        name_subst: DenseIdMap<Variable, String>,
         body_pfs: Vec<Premise>,
         result_lhs: TermId,
         result_rhs: TermId,
@@ -503,6 +525,7 @@ pub enum EqProof {
 pub struct PrettyPrintConfig {
     pub line_width: usize,
     pub indent_size: usize,
+    pub variable_mapper: Option<HashMap<Variable, String>>,
 }
 
 impl Default for PrettyPrintConfig {
@@ -510,6 +533,7 @@ impl Default for PrettyPrintConfig {
         Self {
             line_width: 512,
             indent_size: 4,
+            variable_mapper: None,
         }
     }
 }
