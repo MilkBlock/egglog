@@ -253,10 +253,18 @@ impl EGraph {
         }
         let mut terms = DenseIdMap::<SyntaxId, Value>::new();
         let mut premises = Vec::new();
-        for toplevel in &syntax.roots {
+        for (i, toplevel) in syntax.roots.iter().enumerate() {
             match toplevel {
                 TopLevelLhsExpr::Exists(id) => {
                     let val = self.get_syntax_val(*id, syntax, &subst_val, &mut terms);
+                    let ty = syntax.vars[i].1;
+                    // filter all base_value
+                    match ty {
+                        ColumnTy::Id => {}
+                        ColumnTy::Base(_) => {
+                            continue;
+                        }
+                    }
                     info!("found exist {:?}", toplevel);
                     premises.push(Premise::TermOk(self.explain_term_inner(val, state)));
                 }
