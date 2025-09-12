@@ -200,29 +200,30 @@ impl EGraph {
             .filter(|(_, function)| !function.decl.ignore_viz)
             .map(|(name, function)| {
                 let mut tuples = vec![];
-                self.backend.for_each_while(function.backend_id, |row| {
-                    if tuples.len() >= config.max_calls_per_function.unwrap_or(usize::MAX) {
-                        return false;
-                    }
-                    let (out, inps) = row.vals[0..row.vals.len() - 2].split_last().unwrap();
-                    println!("get out {:?}", out);
-                    tuples.push((
-                        function,
-                        inps.to_vec(),
-                        *out,
-                        row.vals[inps.len() + 2],
-                        row.subsumed,
-                        self.value_to_class_id(&function.schema.output, *out),
-                        self.to_node_id(
-                            None,
-                            SerializedNode::Function {
-                                name: name.clone(),
-                                offset: tuples.len(),
-                            },
-                        ),
-                    ));
-                    true
-                });
+                self.backend
+                    .for_each_while_with_tracing(function.backend_id, |row| {
+                        if tuples.len() >= config.max_calls_per_function.unwrap_or(usize::MAX) {
+                            return false;
+                        }
+                        let (out, inps) = row.vals[0..row.vals.len() - 2].split_last().unwrap();
+                        println!("get out {:?}", out);
+                        tuples.push((
+                            function,
+                            inps.to_vec(),
+                            *out,
+                            row.vals[inps.len() + 2],
+                            row.subsumed,
+                            self.value_to_class_id(&function.schema.output, *out),
+                            self.to_node_id(
+                                None,
+                                SerializedNode::Function {
+                                    name: name.clone(),
+                                    offset: tuples.len(),
+                                },
+                            ),
+                        ));
+                        true
+                    });
                 tuples
             })
             // Filter out functions with no calls

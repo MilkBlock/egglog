@@ -583,6 +583,50 @@ impl EGraph {
         drain_buf!(buf);
     }
 
+    /// Iterate over the rows of a function table, calling `f` on each row. If `f` returns `false`
+    /// the function returns early and stops reading rows from the table.
+    pub fn for_each_while_with_tracing(
+        &self,
+        table: FunctionId,
+        mut f: impl FnMut(FunctionRow<'_>) -> bool,
+    ) {
+        let info = &self.funcs[table];
+        let table = self.funcs[table].table;
+        let schema_math = SchemaMath {
+            tracing: self.tracing,
+            subsume: info.can_subsume,
+            func_cols: info.schema.len(),
+        };
+        let imp = self.db.get_table(table);
+        let all = imp.all();
+        let mut cur = Offset::new(0);
+        let mut buf = TaggedRowBuffer::new(imp.spec().arity());
+        // This somewhat awkward iteration strategy is forced on us by the `scan_bounded` API. We
+        // should look into ways to avoid this cludge where the loop body effectively must be
+        // repeated at the end. The obvious and idiomatic ways to do this all require
+        // `dyn`-compatibility on `Table` or dynamic dispatch per row.
+        macro_rules! drain_buf {
+            ($buf:expr) => {
+                for (_, row) in $buf.non_stale() {
+                    let subsumed =
+                        schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
+                    if !f(FunctionRow {
+                        vals: &row[0..schema_math.func_cols + 2],
+                        subsumed,
+                    }) {
+                        return;
+                    }
+                }
+                $buf.clear();
+            };
+        }
+        while let Some(next) = imp.scan_bounded(all.as_ref(), cur, 32, &mut buf) {
+            drain_buf!(buf);
+            cur = next;
+        }
+        drain_buf!(buf);
+    }
+
     /// A basic method for dumping the state of the database to `log::info!`.
     ///
     /// For large tables, this is unlikely to give particularly useful output.
