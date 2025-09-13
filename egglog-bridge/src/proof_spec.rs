@@ -177,7 +177,7 @@ pub(crate) struct ProofReconstructionState<'a> {
     in_progress: HashSet<Value>,
     store: &'a mut ProofStore,
     term_memo: HashMap<(Value, ColumnTy), TermId>,
-    term_prf_memo: HashMap<Value, TermProofId>,
+    term_prf_memo: HashMap<(Value, ColumnTy), TermProofId>,
     eq_memo: HashMap<(Value, Value), EqProofId>,
 }
 
@@ -284,7 +284,7 @@ impl EGraph {
         state: &mut ProofReconstructionState,
     ) -> TermProofId {
         info!("explain term inner {:?}", term_id);
-        if let Some(prev) = state.term_prf_memo.get(&term_id) {
+        if let Some(prev) = state.term_prf_memo.get(&(term_id, ColumnTy::Id)) {
             return *prev;
         }
         assert!(
@@ -336,7 +336,7 @@ impl EGraph {
         };
 
         state.in_progress.remove(&term_id);
-        state.term_prf_memo.insert(term_id, res);
+        state.term_prf_memo.insert((term_id, ColumnTy::Id), res);
         res
     }
 
