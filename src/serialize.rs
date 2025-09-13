@@ -1,5 +1,6 @@
 use crate::{util::HashMap, *};
 use core_relations::BaseValuePrinter;
+use numeric_id::NumericId;
 use ordered_float::NotNan;
 use std::collections::VecDeque;
 
@@ -266,7 +267,7 @@ impl EGraph {
             serializer.result.nodes.insert(
                 node_id,
                 egraph_serialize::Node {
-                    op: format!("{},{:?},term{:?}", func.decl.name.to_string(), output, term),
+                    op: format!("[{}]{}", term.rep(), func.decl.name.to_string()),
                     eclass: class_id.clone(),
                     cost: NotNan::new(func.decl.cost.unwrap_or(1) as f64).unwrap(),
                     children,

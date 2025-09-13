@@ -176,7 +176,7 @@ impl ProofBuilder {
 pub(crate) struct ProofReconstructionState<'a> {
     in_progress: HashSet<Value>,
     store: &'a mut ProofStore,
-    term_memo: HashMap<Value, TermId>,
+    term_memo: HashMap<(Value, ColumnTy), TermId>,
     term_prf_memo: HashMap<Value, TermProofId>,
     eq_memo: HashMap<(Value, Value), EqProofId>,
 }
@@ -346,7 +346,7 @@ impl EGraph {
         ty: ColumnTy,
         state: &mut ProofReconstructionState,
     ) -> TermId {
-        if let Some(cached) = state.term_memo.get(&term_id) {
+        if let Some(cached) = state.term_memo.get(&(term_id, ty)) {
             return *cached;
         }
         let res = match ty {
@@ -362,16 +362,18 @@ impl EGraph {
                 for (ty, entry) in schema[0..schema.len() - 1].iter().zip(term_row[1..].iter()) {
                     args.push(self.reconstruct_term(*entry, *ty, state));
                 }
-                state.store.termdag.get_or_insert(&Term::Func {
+                let term = &Term::Func {
                     id: func,
                     args,
                     func_id_rendered: self.funcs[func].name.clone(),
                     value: term_row[term_row.len() - 2],
-                })
+                };
+                state.store.termdag.get_or_insert(&term)
             }
             ColumnTy::Base(ty) => {
                 let rendered: Rc<str> = format!(
-                    "{:?}",
+                    "{:?} {:?}",
+                    ty,
                     BaseValuePrinter {
                         base: self.db.base_values(),
                         ty,
@@ -379,14 +381,15 @@ impl EGraph {
                     }
                 )
                 .into();
-                state.store.termdag.get_or_insert(&Term::Constant {
+                let term = &Term::Constant {
                     id: term_id,
                     rendered: Some(rendered),
-                })
+                };
+                state.store.termdag.get_or_insert(&term)
             }
         };
 
-        state.term_memo.insert(term_id, res);
+        state.term_memo.insert((term_id, ty), res);
         res
     }
 
