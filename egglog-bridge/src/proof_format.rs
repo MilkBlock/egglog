@@ -75,7 +75,7 @@ impl TermDag {
         match term {
             Term::Constant { id, rendered } => {
                 if let Some(rendered) = rendered {
-                    printer.write_str(&format!("[{}]{}", id.rep(), rendered))?;
+                    printer.write_str(&format!("{}", rendered))?;
                 } else {
                     printer.write_str(&format!("c{}", id.index()))?;
                 }

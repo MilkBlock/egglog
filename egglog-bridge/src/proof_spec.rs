@@ -372,8 +372,7 @@ impl EGraph {
             }
             ColumnTy::Base(ty) => {
                 let rendered: Rc<str> = format!(
-                    "{:?} {:?}",
-                    ty,
+                    "{:?}",
                     BaseValuePrinter {
                         base: self.db.base_values(),
                         ty,
