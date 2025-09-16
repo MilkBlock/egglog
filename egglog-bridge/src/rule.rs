@@ -6,14 +6,15 @@
 
 use std::{cmp::Ordering, sync::Arc};
 
-use anyhow::Context;
-use core_relations::{
+use crate::core_relations;
+use crate::core_relations::{
     ColumnId, Constraint, CounterId, ExternalFunctionId, PlanStrategy, QueryBuilder,
     RuleBuilder as CoreRuleBuilder, RuleSetBuilder, TableId, Value, WriteVal,
 };
+use crate::numeric_id::{define_id, DenseIdMap, NumericId};
+use anyhow::Context;
 use hashbrown::HashSet;
 use log::{debug, info};
-use numeric_id::{define_id, DenseIdMap, NumericId};
 use smallvec::SmallVec;
 use thiserror::Error;
 

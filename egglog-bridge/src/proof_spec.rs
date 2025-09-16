@@ -4,22 +4,22 @@ use std::{
     sync::Arc,
 };
 
-use core_relations::{
+use crate::core_relations::{
     BaseValuePrinter, ColumnId, DisplacedTableWithProvenance, ExecutionState, MergeVal,
     ProofReason as UfProofReason, ProofStep, RuleBuilder, Value,
 };
+use crate::numeric_id::{DenseIdMap, NumericId, define_id};
 use hashbrown::{HashMap, HashSet};
 use log::info;
-use numeric_id::{define_id, DenseIdMap, NumericId};
 
 use crate::{
+    ColumnTy, EGraph, FunctionId, GetFirstMatch, QueryEntry, Result, RuleId, SideChannel,
+    SourceExpr, TermRowInsert, TopLevelLhsExpr,
     proof_format::{
         CongProof, EqProof, EqProofId, Premise, ProofStore, Term, TermId, TermProof, TermProofId,
     },
     rule::{AtomId, Bindings, DstVar, Variable},
     syntax::{RuleData, SourceSyntax, SyntaxId},
-    ColumnTy, EGraph, FunctionId, GetFirstMatch, QueryEntry, Result, RuleId, SideChannel,
-    SourceExpr, TermRowInsert, TopLevelLhsExpr,
 };
 
 define_id!(pub ReasonSpecId, u32, "A unique identifier for the step in a proof.");
@@ -79,7 +79,7 @@ impl ProofBuilder {
         after: &[QueryEntry],
         vars: RebuildVars,
         db: &mut EGraph,
-    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<()> + Clone {
+    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<()> + Clone + use<> {
         let reason_spec = ProofReason::CongRow;
         let reason_table = db.reason_table(&reason_spec);
         let reason_spec_id = db.cong_spec;
@@ -102,13 +102,13 @@ impl ProofBuilder {
                 entries.push(inner.convert(entry));
             }
             // Now get the new term value, inserting it if the term is new.
-            let term_result = rb.lookup_or_insert(
+            let term_id = rb.lookup_or_insert(
                 term_table,
                 &entries,
                 &[term_counter.into(), reason_id.into()],
                 ColumnId::from_usize(entries.len()),
             )?;
-            inner.mapping.insert(vars.new_term, term_result.into());
+            inner.mapping.insert(vars.new_term, term_id.into());
             inner.mapping.insert(vars.reason, reason_id.into());
             Ok(())
         }
@@ -122,7 +122,7 @@ impl ProofBuilder {
         entries: Vec<QueryEntry>,
         term_var: Variable,
         db: &mut EGraph,
-    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<()> + Clone {
+    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<()> + Clone + use<> {
         let func_table = db.funcs[func].table;
         let term_table = db.term_table(func_table);
         let func_val = Value::new(func.rep());
@@ -414,7 +414,9 @@ impl EGraph {
                 .unwrap();
 
             let Some(steps) = uf_table.get_proof(l, r) else {
-                panic!("attempting to explain why two terms ({l:?} and {r:?}) are equal, but they aren't equal");
+                panic!(
+                    "attempting to explain why two terms ({l:?} and {r:?}) are equal, but they aren't equal"
+                );
             };
 
             assert!(!steps.is_empty(), "empty proof for equality");

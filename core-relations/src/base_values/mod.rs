@@ -6,8 +6,8 @@ use std::{
     hash::Hash,
 };
 
+use crate::numeric_id::{define_id, DenseIdMap, NumericId};
 use log::info;
-use numeric_id::{define_id, DenseIdMap, NumericId};
 
 use crate::common::{HashMap, InternTable, Value};
 
@@ -195,7 +195,7 @@ impl<P: BaseValue> BaseInternTable<P> {
 /// This type is just a helper: users can also implement the [`BaseValue`] trait directly on their
 /// types if the type is defined in the crate in which the implementation is defined, or if they
 /// need custom logic for boxing or unboxing the type.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Boxed<T>(pub T);
 
 impl<T> Boxed<T> {
@@ -205,6 +205,12 @@ impl<T> Boxed<T> {
 
     pub fn into_inner(self) -> T {
         self.0
+    }
+}
+
+impl<T: Debug> Debug for Boxed<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self.0)
     }
 }
 

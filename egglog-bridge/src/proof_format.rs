@@ -2,10 +2,10 @@
 //! Doegens, and Oliver Flatt.
 use std::{hash::Hash, io, rc::Rc, sync::Arc};
 
-use core_relations::Value;
+use crate::core_relations::Value;
+use crate::numeric_id::{define_id, DenseIdMap, NumericId};
 use hashbrown::HashMap;
 use indexmap::IndexSet;
-use numeric_id::{define_id, DenseIdMap, NumericId};
 
 use crate::{rule::Variable, FunctionId};
 

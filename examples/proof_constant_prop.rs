@@ -18,6 +18,7 @@ fn main() {
     let (_, v2) = egraph.eval_expr(&expr2).unwrap();
     egraph
         .serialize(SerializeConfig::default())
+        .egraph
         .to_dot_file("examples/proof_test_src.dot")
         .unwrap();
 
@@ -33,6 +34,7 @@ fn main() {
     egraph.backend.dump_debug_info();
     egraph
         .serialize(SerializeConfig::default())
+        .egraph
         .to_dot_file("examples/proof_test.dot")
         .unwrap();
     let mut prf_store = ProofStore::default();
