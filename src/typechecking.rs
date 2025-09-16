@@ -1,6 +1,7 @@
 use crate::{core::CoreRule, *};
 use ast::Rule;
 use core_relations::ExternalFunction;
+use log::warn;
 
 #[derive(Clone, Debug)]
 pub struct FuncType {
@@ -101,6 +102,7 @@ impl EGraph {
         match self.type_info.sorts.entry(name.to_owned()) {
             HEntry::Occupied(_) => Err(TypeError::SortAlreadyBound(name.to_owned(), span)),
             HEntry::Vacant(e) => {
+                info!("sort insert {}", name);
                 e.insert(sort.clone());
                 sort.register_primitives(self);
                 Ok(())
@@ -353,6 +355,8 @@ impl TypeInfo {
                 if let Some(sort) = self.sorts.get(name) {
                     Ok(sort.clone())
                 } else {
+                    warn!("all sorts {:?}", self.sorts);
+                    warn!("undefined_sort {}", name);
                     Err(TypeError::UndefinedSort(name.clone(), func.span.clone()))
                 }
             })

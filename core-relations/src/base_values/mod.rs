@@ -6,6 +6,7 @@ use std::{
     hash::Hash,
 };
 
+use log::info;
 use numeric_id::{define_id, DenseIdMap, NumericId};
 
 use crate::common::{HashMap, InternTable, Value};
@@ -71,6 +72,7 @@ pub struct BaseValues {
 impl BaseValues {
     /// Register the given type `P` as a base value type in this registry.
     pub fn register_type<P: BaseValue>(&mut self) -> BaseValueId {
+        info!("reg type for {}", std::any::type_name::<P>());
         let type_id = TypeId::of::<P>();
         let next_id = BaseValueId::from_usize(self.type_ids.len());
         let id = *self.type_ids.entry(type_id).or_insert(next_id);
