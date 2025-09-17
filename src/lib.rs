@@ -34,8 +34,8 @@ pub use cli::*;
 use constraint::{Constraint, Problem, SimpleTypeConstraint, TypeConstraint};
 use core::{AtomTerm, ResolvedAtomTerm, ResolvedCall};
 pub use core_relations::{
-    make_external_func, BaseValue, ContainerValue, ExecutionState, ExternalFunctionId, RuleBuilder,
-    RuleSetBuilder, Value, Variable,
+    BaseValue, ContainerValue, ExecutionState, ExternalFunctionId, RuleBuilder, RuleSetBuilder,
+    Value, Variable, make_external_func,
 };
 use csv::Writer;
 pub use egglog_add_primitive::add_primitive;
@@ -48,7 +48,7 @@ use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
-use log::{info, log_enabled, Level};
+use log::{Level, info, log_enabled};
 use numeric_id::DenseIdMap;
 use prelude::*;
 use scheduler::{SchedulerId, SchedulerRecord};

@@ -297,14 +297,31 @@ impl<'a, 'b> RustRuleContext<'a, 'b> {
             panic_id,
         }
     }
-    /// Convert from an egglog value to a Rust type.
+    /// Convert from an egglog value to a Rust base type.
     pub fn value_to_base<T: BaseValue>(&self, x: Value) -> T {
         self.exec_state.base_values().unwrap::<T>(x)
     }
 
-    /// Convert from a Rust type to an egglog value.
+    /// Convert from an egglog value to a Rust container type.
+    /// requires mutable access to execution state
+    pub fn value_to_container<T: ContainerValue>(&mut self, x: Value) -> T {
+        self.exec_state
+            .container_values()
+            .get_val::<T>(x)
+            .unwrap()
+            .clone()
+    }
+
+    /// Convert from a Rust base type to an egglog value.
     pub fn base_to_value<T: BaseValue>(&self, x: T) -> Value {
         self.exec_state.base_values().get::<T>(x)
+    }
+
+    /// Convert from a Rust container type to an egglog value.
+    pub fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
+        self.exec_state
+            .container_values()
+            .register_val::<T>(x, self.exec_state)
     }
 
     fn get_table_action(&self, table: &str) -> (egglog_bridge::TableAction, Option<TermRowInsert>) {
