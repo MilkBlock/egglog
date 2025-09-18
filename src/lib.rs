@@ -1756,7 +1756,12 @@ impl<'a> BackendRule<'a> {
             }
         }
         for var in vars {
-            let syntax_id = self.syntax.add_expr(name2expr.get(&var).unwrap().clone());
+            let syntax_id = self.syntax.add_expr(
+                name2expr
+                    .get(&var)
+                    .unwrap_or_else(|| panic!("{} not found in name2expr", var))
+                    .clone(),
+            );
             self.syntax
                 .add_toplevel_expr(TopLevelLhsExpr::Exists(syntax_id));
         }

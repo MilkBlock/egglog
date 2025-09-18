@@ -8,6 +8,7 @@
 
 use crate::*;
 use std::any::{Any, TypeId};
+use std::ops::Deref;
 
 // Re-exports in `prelude` for convenience.
 pub use crate::core::{GenericAtom, GenericAtomTerm, Query, ResolvedCall};
@@ -302,14 +303,16 @@ impl<'a, 'b> RustRuleContext<'a, 'b> {
         self.exec_state.base_values().unwrap::<T>(x)
     }
 
-    /// Convert from an egglog value to a Rust container type.
+    /// Convert from an egglog value to reference of Rust container type.
     /// requires mutable access to execution state
-    pub fn value_to_container<T: ContainerValue>(&mut self, x: Value) -> T {
-        self.exec_state
-            .container_values()
-            .get_val::<T>(x)
-            .unwrap()
-            .clone()
+    ///
+    /// # warnning
+    /// return type contains a read guard, don't leak this guard or will get stuck when `rebuild`
+    pub fn value_to_container<T: ContainerValue>(
+        &mut self,
+        x: Value,
+    ) -> Option<impl Deref<Target = T>> {
+        self.exec_state.container_values().get_val::<T>(x)
     }
 
     /// Convert from a Rust base type to an egglog value.
