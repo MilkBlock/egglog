@@ -46,13 +46,14 @@ use egglog_bridge::{
 };
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
+pub use egraph_serialize::NodeId;
 use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 use log::{Level, info, log_enabled};
 use numeric_id::DenseIdMap;
 use prelude::*;
 use scheduler::{SchedulerId, SchedulerRecord};
-pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};
+pub use serialize::{RawEGraphNode, SerializeConfig, SerializeOutput, SerializedNode};
 use sort::*;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;

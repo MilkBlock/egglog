@@ -1,9 +1,17 @@
 use crate::{util::HashMap, *};
-use core_relations::BaseValuePrinter;
+use egglog_core_relations::BaseValuePrinter;
 use numeric_id::NumericId;
 use ordered_float::NotNan;
 use std::collections::VecDeque;
 
+pub struct RawEGraphNode {
+    pub inputs: Vec<Value>, // inputs
+    pub output: Value,      // output
+    pub term: Value,        // term
+    pub subsumed: bool,     // is subsumed
+    pub class_name: egraph_serialize::ClassId,
+    pub node_name: egraph_serialize::NodeId,
+}
 pub struct SerializeConfig {
     // Maximumum number of functions to include in the serialized graph, any after this will be discarded
     pub max_functions: Option<usize>,
@@ -324,6 +332,44 @@ impl EGraph {
             .collect();
 
         serializer.result
+    }
+    pub fn serialize_tracing_raw(
+        &self,
+        config: SerializeConfig,
+    ) -> HashMap<String, Vec<RawEGraphNode>> {
+        // First collect a list of all the calls we want to serialize
+        let all_calls = self
+            .functions
+            .iter()
+            .filter(|(_, function)| !function.decl.ignore_viz)
+            .map(|(name, function)| {
+                let mut tuples = vec![];
+                self.backend
+                    .for_each_while_with_tracing(function.backend_id, |row| {
+                        if tuples.len() >= config.max_calls_per_function.unwrap_or(usize::MAX) {
+                            return false;
+                        }
+                        let (out, inps) = row.vals[0..row.vals.len() - 2].split_last().unwrap();
+                        tuples.push(RawEGraphNode {
+                            inputs: inps.to_vec(),
+                            output: *out,
+                            term: row.vals[inps.len() + 2],
+                            subsumed: row.subsumed,
+                            class_name: self.value_to_class_id(&function.schema.output, *out),
+                            node_name: self.to_node_id(
+                                None,
+                                SerializedNode::Function {
+                                    name: name.clone(),
+                                    offset: tuples.len(),
+                                },
+                            ),
+                        });
+                        true
+                    });
+                (name.clone(), tuples)
+            })
+            .collect();
+        all_calls
     }
 
     /// Gets the serialized class ID for a value.
