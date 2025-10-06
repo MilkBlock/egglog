@@ -892,10 +892,12 @@ impl EGraph {
         ruleset: String,
     ) -> Result<String, Error> {
         log::debug!("run level 3 {:?}", rule);
-        let core_rule =
-            rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
+        let core_rule = rule.to_canonicalized_core_rule(
+            &self.type_info,
+            &mut self.parser.symbol_gen,
+            &mut Default::default(),
+        )?;
         let (query, actions) = (&core_rule.body, &core_rule.head);
-        log::debug!("run level 4 {:#?} {:#?}", query, actions);
 
         let (rule_id, _, _) = {
             let mut translator = BackendRule::new(
@@ -903,7 +905,7 @@ impl EGraph {
                 &self.functions,
                 &self.type_info,
             );
-            translator.query(query, &[], false);
+            translator.query(query, &vec![], false, &mut Default::default());
             translator.actions(actions)?;
             translator.build()
         };
@@ -1044,8 +1046,11 @@ impl EGraph {
             head: ResolvedActions::default(),
             body: facts.to_vec(),
         };
-        let core_rule =
-            rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
+        let core_rule = rule.to_canonicalized_core_rule(
+            &self.type_info,
+            &mut self.parser.symbol_gen,
+            &mut Default::default(),
+        )?;
         let query = core_rule.body;
 
         let ext_sc = egglog_bridge::SideChannel::default();
@@ -1062,7 +1067,7 @@ impl EGraph {
             &self.functions,
             &self.type_info,
         );
-        translator.query(&query, &[], true);
+        translator.query(&query, &vec![], true, &mut Default::default());
         translator
             .rb
             .call_external_func(ext_id, &[], egglog_bridge::ColumnTy::Id, || {
@@ -1713,11 +1718,12 @@ impl<'a> BackendRule<'a> {
     fn query(
         &mut self,
         query: &core::Query<ResolvedCall, ResolvedVar>,
-        vars: &[(String, ArcSort)],
+        vars: &Vec<ResolvedVar>,
         include_subsumed: bool,
+        all_subsituted: &mut HashMap<ResolvedAtomTerm, IndexSet<ResolvedVar>>,
     ) {
-        let mut name2expr = IndexMap::default();
-        let vars = IndexSet::from_iter(vars.iter().map(|x| x.0.to_string()));
+        let mut entry2src_expr = IndexMap::default();
+        let vars = IndexSet::from_iter(vars.iter().map(|x| x));
         for atom in &query.atoms {
             match &atom.head {
                 ResolvedCall::Func(f) => {
@@ -1736,17 +1742,22 @@ impl<'a> BackendRule<'a> {
                         match entry {
                             QueryEntry::Var { id, name } => {
                                 let name = name.as_ref().unwrap().to_string();
-                                name2expr.insert(
-                                    name.clone(),
+                                entry2src_expr.insert(
+                                    entry.clone(),
                                     SourceExpr::Var {
                                         id: *id,
                                         ty: arg.output().column_ty(self.rb.egraph()),
                                         name: name.clone(),
                                     },
                                 );
-                                // }
                             }
-                            QueryEntry::Const { val: _, ty: _ } => panic!(),
+                            QueryEntry::Const { val, ty } => {
+                                // panic!("contains a const query entry {:?} of ty {:?}", val, ty);
+                                entry2src_expr.insert(
+                                    entry.clone(),
+                                    SourceExpr::Const { ty: *ty, val: *val },
+                                );
+                            }
                         }
                     }
                 }
@@ -1756,11 +1767,39 @@ impl<'a> BackendRule<'a> {
                 }
             }
         }
-        for var in vars {
+        log::debug!("all subsituted {:?}", all_subsituted);
+        'a: for var in vars {
+            for (subst_by, subsituted) in all_subsituted.iter() {
+                match subsituted.iter().find(|x| x.name == var.name) {
+                    Some(_) => {
+                        let entry = &self.entries.get(subst_by).unwrap();
+                        let syntax_id = self.syntax.add_expr(
+                            entry2src_expr
+                                .get(*entry)
+                                .unwrap_or_else(|| panic!("{} not found in entry2src_expr", var))
+                                .clone(),
+                        );
+                        self.syntax
+                            .add_toplevel_expr(TopLevelLhsExpr::Exists(syntax_id));
+                        continue 'a;
+                    }
+                    None => {}
+                }
+            }
+            // if not found in all_subsituted, then it is a free variable
+            let entry = &self
+                .entries
+                .iter()
+                .find(|x| {
+                    matches!(x.0,ResolvedAtomTerm::Var(_,x) if {
+                    log::debug!("comparing {} and {}", x.name, var.name);
+                    x.name == var.name})
+                })
+                .unwrap();
             let syntax_id = self.syntax.add_expr(
-                name2expr
-                    .get(&var)
-                    .unwrap_or_else(|| panic!("{} not found in name2expr", var))
+                entry2src_expr
+                    .get(entry.1)
+                    .unwrap_or_else(|| panic!("{} not found in entry2src_expr", var))
                     .clone(),
             );
             self.syntax

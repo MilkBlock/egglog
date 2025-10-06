@@ -76,8 +76,17 @@ impl FreshGen<String, String> for SymbolGen {
 
 impl FreshGen<ResolvedCall, ResolvedVar> for SymbolGen {
     fn fresh(&mut self, name_hint: &ResolvedCall) -> ResolvedVar {
-        let name = format!("{}{}{}", self.reserved_string, name_hint, self.count);
-        self.count += 1;
+        let name = match name_hint {
+            ResolvedCall::Func(FuncType {
+                recommend_var_name: Some(recommend_var_name),
+                ..
+            }) => recommend_var_name.clone(),
+            _ => {
+                let name = format!("{}{}{}", self.reserved_string, name_hint, self.count);
+                self.count += 1;
+                name
+            }
+        };
         let sort = match name_hint {
             ResolvedCall::Func(f) => f.output.clone(),
             ResolvedCall::Primitive(SpecializedPrimitive { output, .. }) => output.clone(),

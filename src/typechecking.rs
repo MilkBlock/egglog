@@ -9,6 +9,7 @@ pub struct FuncType {
     pub subtype: FunctionSubtype,
     pub input: Vec<ArcSort>,
     pub output: ArcSort,
+    pub recommend_var_name: Option<String>,
 }
 
 #[derive(Clone)]
@@ -134,6 +135,11 @@ impl EGraph {
             .entry(prim.name().to_owned())
             .or_default()
             .push(PrimitiveWithId(prim, ext));
+    }
+    /// Add a user-defined primitive
+    pub fn get_primitive(&self, prim_name: &str) -> Option<&Vec<PrimitiveWithId>>
+where {
+        self.type_info.primitives.get(prim_name)
     }
 
     pub(crate) fn typecheck_program(
@@ -366,6 +372,7 @@ impl TypeInfo {
             subtype: func.subtype,
             input,
             output: output.clone(),
+            recommend_var_name: None,
         })
     }
 

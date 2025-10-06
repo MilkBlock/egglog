@@ -61,6 +61,7 @@ fn resolved_var_to_call(var: &ResolvedVar) -> ResolvedCall {
         subtype: FunctionSubtype::Custom,
         input: vec![],
         output: var.sort.clone(),
+        recommend_var_name: None,
     })
 }
 
@@ -110,6 +111,7 @@ impl GlobalRemover<'_> {
                         subtype: FunctionSubtype::Custom,
                         input: vec![],
                         output: ty.clone(),
+                        recommend_var_name: None,
                     });
                     vec![
                         GenericNCommand::Function(func_decl),

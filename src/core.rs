@@ -38,9 +38,9 @@ impl<Head> HeadOrEq<Head> {
 
 #[derive(Debug, Clone)]
 pub struct SpecializedPrimitive {
-    pub(crate) primitive: PrimitiveWithId,
-    pub(crate) input: Vec<ArcSort>,
-    pub(crate) output: ArcSort,
+    pub primitive: PrimitiveWithId,
+    pub input: Vec<ArcSort>,
+    pub output: ArcSort,
 }
 
 #[derive(Debug, Clone)]
@@ -248,11 +248,19 @@ where
         })
     }
 
-    fn subst(&mut self, subst: &HashMap<Leaf, GenericAtomTerm<Leaf>>) {
+    fn subst(
+        &mut self,
+        subst: &HashMap<Leaf, GenericAtomTerm<Leaf>>,
+        all_substitued: &mut HashMap<GenericAtomTerm<Leaf>, IndexSet<Leaf>>,
+    ) {
         for arg in self.args.iter_mut() {
             match arg {
                 GenericAtomTerm::Var(_, v) => {
                     if let Some(at) = subst.get(v) {
+                        all_substitued
+                            .entry(at.clone())
+                            .or_default()
+                            .insert(v.clone());
                         *arg = at.clone();
                     }
                 }
@@ -669,9 +677,20 @@ where
         MappedExpr<Head, Leaf>,
     ) {
         match self {
-            GenericExpr::Lit(span, lit) => (vec![], GenericExpr::Lit(span.clone(), lit.clone())),
-            GenericExpr::Var(span, v) => (vec![], GenericExpr::Var(span.clone(), v.clone())),
+            GenericExpr::Lit(span, lit) => {
+                log::debug!("DEBUG: Processing Literal: {}", lit);
+                (vec![], GenericExpr::Lit(span.clone(), lit.clone()))
+            }
+            GenericExpr::Var(span, v) => {
+                log::debug!("DEBUG: Processing Variable: {}", v);
+                (vec![], GenericExpr::Var(span.clone(), v.clone()))
+            }
             GenericExpr::Call(span, f, children) => {
+                log::debug!(
+                    "DEBUG: Processing Call: {} with {} children",
+                    f,
+                    children.len()
+                );
                 let fresh = fresh_gen.fresh(f);
                 let mut new_children = vec![];
                 let mut atoms = vec![];
@@ -687,11 +706,17 @@ where
                     new_children.push(GenericAtomTerm::Var(span.clone(), fresh.clone()));
                     new_children
                 };
-                atoms.push(GenericAtom {
+                let atom = GenericAtom {
                     span: span.clone(),
                     head: HeadOrEq::Head(f.clone()),
                     args,
-                });
+                };
+                log::debug!(
+                    "DEBUG: Created Call atom for {} with {} args",
+                    f,
+                    atom.args.len()
+                );
+                atoms.push(atom);
                 (
                     atoms,
                     GenericExpr::Call(
@@ -774,9 +799,13 @@ where
     Head2: Clone,
     Leaf: Clone + Eq + Hash,
 {
-    pub fn subst(&mut self, subst: &HashMap<Leaf, GenericAtomTerm<Leaf>>) {
+    pub fn subst(
+        &mut self,
+        subst: &HashMap<Leaf, GenericAtomTerm<Leaf>>,
+        all_substitued: &mut HashMap<GenericAtomTerm<Leaf>, IndexSet<Leaf>>,
+    ) {
         for atom in &mut self.body.atoms {
-            atom.subst(subst);
+            atom.subst(subst, all_substitued);
         }
         self.head.subst(subst);
     }
@@ -795,6 +824,7 @@ where
         self,
         // Users need to pass in a substitute for equality constraints.
         value_eq: impl Fn(&GenericAtomTerm<Leaf>, &GenericAtomTerm<Leaf>) -> Head,
+        all_subtitued: &mut HashMap<GenericAtomTerm<Leaf>, IndexSet<Leaf>>,
     ) -> GenericCoreRule<Head, Head, Leaf> {
         let mut result_rule = self;
         loop {
@@ -812,7 +842,7 @@ where
             }
             if let Some((x, y)) = to_subst {
                 let subst = HashMap::from_iter([(x.clone(), y.clone())]);
-                result_rule.subst(&subst);
+                result_rule.subst(&subst, all_subtitued);
             } else {
                 break;
             }
@@ -897,6 +927,7 @@ impl ResolvedRule {
         &self,
         typeinfo: &TypeInfo,
         fresh_gen: &mut SymbolGen,
+        all_subsituted: &mut HashMap<ResolvedAtomTerm, IndexSet<ResolvedVar>>,
     ) -> Result<ResolvedCoreRule, TypeError> {
         let value_eq = &typeinfo.get_prims("value-eq").unwrap()[0];
         let value_eq = |at1: &ResolvedAtomTerm, at2: &ResolvedAtomTerm| {
@@ -913,8 +944,7 @@ impl ResolvedRule {
         // may turn ungrounded variables in a query to unbounded variables in actions (e.g.,
         // `(rule ((= x y)) ((R x y)))`) but unboundedness is only checked during type checking.
         grounded_check(&rule)?;
-
-        let rule = rule.canonicalize(value_eq);
+        let rule = rule.canonicalize(value_eq, all_subsituted);
 
         Ok(rule)
     }

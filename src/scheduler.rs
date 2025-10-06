@@ -370,7 +370,7 @@ impl SchedulerRuleInfo {
             &egraph.functions,
             &egraph.type_info,
         );
-        qrule_builder.query(&rule.body, &[], true);
+        qrule_builder.query(&rule.body, &vec![], true, &mut Default::default());
         let entries = free_vars
             .iter()
             .map(|fv| qrule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))

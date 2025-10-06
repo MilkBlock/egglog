@@ -7,6 +7,7 @@ pub mod remove_globals;
 use crate::core::{GenericAtom, GenericAtomTerm, HeadOrEq, Query, ResolvedCall, ResolvedCoreRule};
 use crate::*;
 pub use expr::*;
+use itertools::Itertools;
 pub use parse::*;
 
 #[derive(Clone, Debug)]
@@ -1015,7 +1016,7 @@ where
 }
 
 pub type Fact = GenericFact<String, String>;
-pub(crate) type ResolvedFact = GenericFact<ResolvedCall, ResolvedVar>;
+pub type ResolvedFact = GenericFact<ResolvedCall, ResolvedVar>;
 pub(crate) type MappedFact<Head, Leaf> = GenericFact<CorrespondingVar<Head, Leaf>, Leaf>;
 
 /// Facts are the left-hand side of a [`Command::Rule`].
@@ -1059,6 +1060,7 @@ where
         for fact in self.0.iter() {
             match fact {
                 GenericFact::Eq(span, e1, e2) => {
+                    log::debug!("DEBUG: Processing Eq fact: {} = {}", e1, e2);
                     let mut to_equate = vec![];
                     let mut process = |expr: &GenericExpr<Head, Leaf>| {
                         let (child_atoms, expr) = expr.to_query(typeinfo, fresh_gen);
@@ -1068,19 +1070,42 @@ where
                     };
                     let e1 = process(e1);
                     let e2 = process(e2);
-                    atoms.push(GenericAtom {
+                    let atom = GenericAtom {
                         span: span.clone(),
                         head: HeadOrEq::Eq,
                         args: to_equate,
-                    });
+                    };
+                    log::debug!("DEBUG: Created Eq atom with {} args", atom.args.len());
+                    atoms.push(atom);
                     new_body.push(GenericFact::Eq(span.clone(), e1, e2));
                 }
                 GenericFact::Fact(expr) => {
+                    log::debug!("DEBUG: Processing Fact: {}", expr);
                     let (child_atoms, expr) = expr.to_query(typeinfo, fresh_gen);
                     atoms.extend(child_atoms);
                     new_body.push(GenericFact::Fact(expr));
                 }
             }
+        }
+        for (i, atom) in atoms.iter().enumerate() {
+            log::debug!(
+                "DEBUG: Atom {}: head {} : {} args",
+                i,
+                match &atom.head {
+                    HeadOrEq::Head(head) => format!("Head {}", head),
+                    HeadOrEq::Eq => {
+                        "Eq".to_owned()
+                    }
+                },
+                atom.args
+                    .iter()
+                    .map(|x| match &x {
+                        GenericAtomTerm::Var(_, v) => format!("{}", v),
+                        GenericAtomTerm::Literal(_, literal) => format!("{}", literal),
+                        GenericAtomTerm::Global(_, g) => format!("{}", g),
+                    })
+                    .join(",")
+            );
         }
         (Query { atoms }, new_body)
     }

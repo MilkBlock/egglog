@@ -514,16 +514,15 @@ pub fn rust_rule(
 impl EGraph {
     /// raw version of [`rust_rule`], almost same implmenation but with different parameter types.
     ///
-    /// [`Facts<String, String>`] -> [`core::Query`] and [`Actions`] -> [`Fn`]
-    pub fn raw_add_rule_with_name(
+    /// [`Facts<String, String>`] -> [`ResolvedFact`] and [`Actions`] -> [`Fn`]
+    pub fn raw_resolved_rule_add_rule_with_name(
         &mut self,
         rule_name: String,
         ruleset: String,
-        query: crate::core::Query<ResolvedCall, ResolvedVar>,
+        facts: Vec<ResolvedFact>,
         vars: &[(String, ArcSort)],
         func: impl Fn(&mut RustRuleContext, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
     ) -> Result<(String, RuleId), Error> {
-        use crate::core::{GenericCoreAction, GenericCoreRule};
         let prim_name = self.parser.symbol_gen.fresh(rule_name.as_str());
         let panic_id = self.backend.new_panic(format!("{prim_name}_panic"));
         let table_actions = {
@@ -550,44 +549,73 @@ impl EGraph {
             func,
             reason_tbl_and_spec_channel: reason_tbl_channel.clone(),
         });
-        let action = GenericCoreAction::Let(
+        let resolved_action = ResolvedAction::Let(
             span!(),
             ResolvedVar {
                 name: prim_name.to_string(),
                 sort: UnitSort.to_arcsort(),
                 is_global_ref: false,
             },
-            ResolvedCall::from_resolution(
-                &prim_name,
+            ResolvedExpr::Call(
+                span!(),
+                ResolvedCall::from_resolution(
+                    &prim_name,
+                    vars.iter()
+                        .map(|x| x.1.clone())
+                        .chain(std::iter::once(UnitSort.to_arcsort()))
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                    &self.type_info,
+                ),
                 vars.iter()
-                    .map(|x| x.1.clone())
-                    .chain(std::iter::once(UnitSort.to_arcsort()))
-                    .collect::<Vec<_>>()
-                    .as_slice(),
-                &self.type_info,
+                    .map(|x| {
+                        GenericExpr::Var(
+                            span!(),
+                            ResolvedVar {
+                                name: x.0.to_string(),
+                                sort: x.1.clone(),
+                                is_global_ref: false,
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>(),
             ),
-            vars.iter()
-                .map(|x| {
-                    core::GenericAtomTerm::Var(
-                        span!(),
-                        ResolvedVar {
-                            name: x.0.to_string(),
-                            sort: x.1.clone(),
-                            is_global_ref: false,
-                        },
-                    )
-                })
-                .collect(),
         );
-        let actions = crate::core::GenericCoreActions(vec![action]);
+        let resolved_rule = ResolvedRule {
+            span: span!(),
+            head: ResolvedActions::new(vec![resolved_action]),
+            body: facts,
+        };
+        let mut all_subsituted = HashMap::default();
+
+        let core_rule = resolved_rule.to_canonicalized_core_rule(
+            &self.type_info,
+            &mut self.parser.symbol_gen,
+            &mut all_subsituted,
+        )?;
+        for atom in &core_rule.body.atoms {
+            log::debug!("core rule {:#?}", atom);
+        }
+        for entry in &all_subsituted {
+            log::debug!("mapping {:?} to {:?}", entry.1, entry.0);
+        }
+        let vars = vars
+            .iter()
+            .map(|x| ResolvedVar {
+                name: x.0.to_string(),
+                sort: x.1.clone(),
+                is_global_ref: false,
+            })
+            .collect::<Vec<_>>();
+
         let (rule_id, _, reason_spec_id) = {
             let mut translator = BackendRule::new(
                 self.backend.new_rule(&rule_name, self.seminaive),
                 &self.functions,
                 &self.type_info,
             );
-            translator.query(&query, vars, false);
-            translator.actions(&actions)?;
+            translator.query(&core_rule.body, &vars, false, &mut all_subsituted);
+            translator.actions(&core_rule.head)?;
             translator.build()
         };
         *reason_tbl_channel.lock().unwrap() =
@@ -604,14 +632,7 @@ impl EGraph {
                         indexmap::map::Entry::Occupied(_) => {
                             panic!("Rule '{rule_name}' was already present")
                         }
-                        indexmap::map::Entry::Vacant(e) => e.insert((
-                            GenericCoreRule {
-                                span: span!(),
-                                body: query,
-                                head: actions,
-                            },
-                            rule_id,
-                        )),
+                        indexmap::map::Entry::Vacant(e) => e.insert((core_rule, rule_id)),
                     };
                     Ok((rule_name, rule_id))
                 }
