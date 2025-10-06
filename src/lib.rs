@@ -1721,7 +1721,7 @@ impl<'a> BackendRule<'a> {
         vars: &Vec<ResolvedVar>,
         include_subsumed: bool,
         all_subsituted: &mut HashMap<ResolvedAtomTerm, IndexSet<ResolvedVar>>,
-    ) {
+    ) -> Vec<usize> {
         let mut entry2src_expr = IndexMap::default();
         let vars = IndexSet::from_iter(vars.iter().map(|x| x));
         for atom in &query.atoms {
@@ -1767,8 +1767,9 @@ impl<'a> BackendRule<'a> {
                 }
             }
         }
+        let mut input2reason_indices = vec![];
         log::debug!("all subsituted {:?}", all_subsituted);
-        'a: for var in vars {
+        'a: for (i, var) in vars.iter().enumerate() {
             for (subst_by, subsituted) in all_subsituted.iter() {
                 match subsituted.iter().find(|x| x.name == var.name) {
                     Some(_) => {
@@ -1779,6 +1780,10 @@ impl<'a> BackendRule<'a> {
                                 .unwrap_or_else(|| panic!("{} not found in entry2src_expr", var))
                                 .clone(),
                         );
+                        log::debug!("got var {} as {:?}", var.name, subst_by);
+                        if let QueryEntry::Var { .. } = entry {
+                            input2reason_indices.push(i);
+                        }
                         self.syntax
                             .add_toplevel_expr(TopLevelLhsExpr::Exists(syntax_id));
                         continue 'a;
@@ -1802,10 +1807,12 @@ impl<'a> BackendRule<'a> {
                     .unwrap_or_else(|| panic!("{} not found in entry2src_expr", var))
                     .clone(),
             );
+            input2reason_indices.push(i);
             self.syntax
                 .add_toplevel_expr(TopLevelLhsExpr::Exists(syntax_id));
         }
-        info!("got syntax: {:#?}", self.syntax)
+        info!("got syntax: {:#?}", self.syntax);
+        input2reason_indices
     }
 
     fn actions(&mut self, actions: &core::ResolvedCoreActions) -> Result<(), Error> {

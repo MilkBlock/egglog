@@ -268,26 +268,23 @@ impl<'a, 'b> RustRuleContext<'a, 'b> {
         input_values: Option<&'_ [Value]>,
         union_action: egglog_bridge::UnionAction,
         table_actions: HashMap<String, (egglog_bridge::TableAction, Option<TermRowInsert>)>,
-        reason_table_and_spec: Option<(TableId, ReasonSpecId)>,
+        reason_table_and_spec_and_input2reason: Option<(TableId, ReasonSpecId, Vec<usize>)>,
         panic_id: ExternalFunctionId,
     ) -> Self
     where
         'c: 'a,
     {
-        let proof_value = match (input_values, reason_table_and_spec) {
-            (Some(input_values), Some(reason_tbl_and_spec)) => Some(TableAction::query_reason(
-                reason_tbl_and_spec.0,
-                reason_tbl_and_spec.1,
-                exec_state,
-                input_values,
-            )),
-            _ => {
-                info!(
-                    "tracing is disabled {:?} {:?}",
-                    input_values, reason_table_and_spec
-                );
-                None
+        let proof_value = match (input_values, reason_table_and_spec_and_input2reason) {
+            (Some(input_values), Some(reason_table_and_spec_and_input2reason)) => {
+                Some(TableAction::query_reason(
+                    reason_table_and_spec_and_input2reason.0,
+                    reason_table_and_spec_and_input2reason.1,
+                    reason_table_and_spec_and_input2reason.2,
+                    exec_state,
+                    input_values,
+                ))
             }
+            _ => None,
         };
         info!("get proof_val {:?}", proof_value);
         Self {
@@ -391,7 +388,7 @@ struct RustRuleRhs<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> {
     panic_id: ExternalFunctionId,
     /// channel used to send the reason table and reason spec id to the rhs context
     /// you can't them before rule is added but Rhs should be created before rule is added
-    reason_tbl_and_spec_channel: SideChannel<(TableId, ReasonSpecId)>,
+    reason_tbl_and_spec_channel: SideChannel<(TableId, ReasonSpecId, Vec<usize>)>,
     func: F,
 }
 
@@ -411,14 +408,18 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
     }
 
     fn apply(&self, exec_state: &mut ExecutionState, values: &[Value]) -> Option<Value> {
-        let reason_table_and_spec = self.reason_tbl_and_spec_channel.lock().unwrap().clone();
-        info!("rust_rule_context apply get {:?}", reason_table_and_spec);
+        let reason_table_and_spec_and_input2reason =
+            self.reason_tbl_and_spec_channel.lock().unwrap().clone();
+        info!(
+            "rust_rule_context apply get {:?}",
+            reason_table_and_spec_and_input2reason
+        );
         let mut context = RustRuleContext::new(
             exec_state,
             Some(values),
             self.union_action,
             self.table_actions.clone(),
-            reason_table_and_spec,
+            reason_table_and_spec_and_input2reason,
             self.panic_id,
         );
         (self.func)(&mut context, values)?;
@@ -539,7 +540,7 @@ impl EGraph {
                 })
                 .collect()
         };
-        let reason_tbl_channel = SideChannel::default();
+        let reason_tbl_and_mapping_channel = SideChannel::default();
         self.add_primitive(RustRuleRhs {
             name: prim_name.clone(),
             inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
@@ -547,7 +548,7 @@ impl EGraph {
             table_actions,
             panic_id,
             func,
-            reason_tbl_and_spec_channel: reason_tbl_channel.clone(),
+            reason_tbl_and_spec_channel: reason_tbl_and_mapping_channel.clone(),
         });
         let resolved_action = ResolvedAction::Let(
             span!(),
@@ -608,18 +609,23 @@ impl EGraph {
             })
             .collect::<Vec<_>>();
 
-        let (rule_id, _, reason_spec_id) = {
+        let ((rule_id, _, reason_spec_id), input2reason) = {
             let mut translator = BackendRule::new(
                 self.backend.new_rule(&rule_name, self.seminaive),
                 &self.functions,
                 &self.type_info,
             );
-            translator.query(&core_rule.body, &vars, false, &mut all_subsituted);
+            let input2reason = translator.query(&core_rule.body, &vars, false, &mut all_subsituted);
             translator.actions(&core_rule.head)?;
-            translator.build()
+            (translator.build(), input2reason)
         };
-        *reason_tbl_channel.lock().unwrap() =
-            reason_spec_id.map(|id| (self.backend.reason_spec_id_to_reason_table(id), id));
+        *reason_tbl_and_mapping_channel.lock().unwrap() = reason_spec_id.map(|id| {
+            (
+                self.backend.reason_spec_id_to_reason_table(id),
+                id,
+                input2reason,
+            )
+        });
         info!(
             "channel send {:?}",
             reason_spec_id.map(|id| (self.backend.reason_spec_id_to_reason_table(id), id))

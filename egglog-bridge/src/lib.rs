@@ -22,13 +22,13 @@ use crate::core_relations::{
     ExternalFunction, ExternalFunctionId, MergeVal, Offset, PlanStrategy, ProofEdge, RuleSetReport,
     SortedWritesTable, TableId, TaggedRowBuffer, Value, WrappedTable,
 };
-use crate::numeric_id::{define_id, DenseIdMap, DenseIdMapWithReuse, IdVec, NumericId};
+use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, IdVec, NumericId, define_id};
 use crate::proof_spec::ProofBuilder;
-use dyn_clone::{clone_trait_object, DynClone};
+use dyn_clone::{DynClone, clone_trait_object};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use hashbrown::HashMap;
-use indexmap::{map::Entry, IndexMap, IndexSet};
+use indexmap::{IndexMap, IndexSet, map::Entry};
 use log::info;
 use once_cell::sync::Lazy;
 use petgraph::Graph;
@@ -1441,6 +1441,7 @@ impl TableAction {
     pub fn query_reason(
         reason_table: TableId,
         reason_spec_id: ReasonSpecId,
+        input2reason: Vec<usize>,
         state: &mut ExecutionState,
         input: &[Value],
     ) -> Value {
@@ -1448,7 +1449,8 @@ impl TableAction {
         info!("reason table is {:?}", reason_table);
         info!("reason spec id is {:?}", reason_spec_id);
         v.push(Value::from_usize(reason_spec_id.index()));
-        v.extend_from_slice(input);
+        // input mapping to be reason key
+        v.extend_from_slice(&input2reason.iter().map(|i| input[*i]).collect::<Vec<_>>());
         info!("keys is {:?}", v);
         let reason_row = state.predict_val(reason_table, &v, iter::empty());
         info!("reason row is {:?}", reason_row);
@@ -1456,7 +1458,7 @@ impl TableAction {
             reason_table,
             &v,
             iter::empty(),
-            ColumnId::from_usize(input.len() + 1),
+            ColumnId::from_usize(input2reason.len() + 1),
         );
         info!("reason is {:?}", reason);
         reason
