@@ -1820,7 +1820,7 @@ impl EGraph {
         let mut termdag = TermDag::default();
         let (_cost, term) = extractor
             .extract_best_with_sort(self, &mut termdag, value, sort)
-            .ok_or_else(|| Error::ExpectFail(span!(), "extract-allow-unextractable".into()))?;
+            .ok_or_else(|| Error::ExpectFail(span!()))?;
         Ok(termdag.to_string(term))
     }
 }
