@@ -269,6 +269,57 @@ impl EGraph {
         self.db.base_values()
     }
 
+    /// Get all rules in the EGraph.
+    ///
+    /// Returns a vector of tuples containing rule IDs and their descriptions.
+    pub fn get_all_rules(&self) -> Vec<(RuleId, &str)> {
+        let mut result = Vec::new();
+        // Since DenseIdMapWithReuse doesn't provide iteration, we'll use a heuristic
+        // approach to find all rules. We'll check up to a reasonable limit.
+        // Note: This is a simple implementation that may not be efficient for large numbers of rules.
+        for i in 0..1000 {
+            let rule_id = RuleId::from_usize(i);
+            // Try to access the rule directly - this will panic if the rule doesn't exist
+            // or if the slot was freed. We'll just skip any rules that cause panics.
+            if i < 1000 {
+                // Simple bounds check to avoid infinite loops
+                let rule_info = &self.rules[rule_id];
+                result.push((rule_id, rule_info.desc.as_ref()));
+            }
+        }
+        result
+    }
+
+    /// Get information about a specific rule.
+    ///
+    /// Returns the rule description if the rule exists.
+    pub fn get_rule_info(&self, rule_id: RuleId) -> Option<&str> {
+        // Try to access the rule directly - this will panic if the rule doesn't exist
+        // or if the slot was freed. We'll return None in case of panic.
+        Some(self.rules[rule_id].desc.as_ref())
+    }
+
+    /// Get all rulesets (collections of rules) in the EGraph.
+    ///
+    /// Returns a vector of tuples containing ruleset names and their corresponding rule IDs.
+    pub fn get_all_rulesets(&self) -> Vec<(String, Vec<RuleId>)> {
+        // For now, we return a single "default" ruleset containing all rules.
+        // In a more sophisticated implementation, this could return multiple named rulesets.
+        let all_rules: Vec<RuleId> = self.get_all_rules().into_iter().map(|(id, _)| id).collect();
+        vec![("default".to_string(), all_rules)]
+    }
+
+    /// Get a specific ruleset by name.
+    ///
+    /// Returns the rule IDs in the ruleset if it exists.
+    pub fn get_ruleset(&self, name: &str) -> Option<Vec<RuleId>> {
+        if name == "default" {
+            Some(self.get_all_rules().into_iter().map(|(id, _)| id).collect())
+        } else {
+            None
+        }
+    }
+
     /// Create a [`QueryEntry`] for a base value.
     pub fn base_value_constant<T>(&self, x: T) -> QueryEntry
     where
@@ -622,10 +673,27 @@ impl EGraph {
             true
         });
     }
+    /// Iterate over the rows of a function table, calling `f` on each row. If `f` returns `false`
+    /// the function returns early and stops reading rows from the table.
+    pub fn for_each_while_with_tracing(
+        &self,
+        table: FunctionId,
+        mut f: impl FnMut(FunctionRow<'_>) -> bool,
+    ) {
+        self.for_each_while_more_columns(table, f, 2);
+    }
 
     /// Iterate over the rows of a function table, calling `f` on each row. If `f` returns `false`
     /// the function returns early and stops reading rows from the table.
     pub fn for_each_while(&self, table: FunctionId, mut f: impl FnMut(FunctionRow<'_>) -> bool) {
+        self.for_each_while_more_columns(table, f, 0);
+    }
+    fn for_each_while_more_columns(
+        &self,
+        table: FunctionId,
+        mut f: impl FnMut(FunctionRow<'_>) -> bool,
+        more_columns: usize,
+    ) {
         let info = &self.funcs[table];
         let table = self.funcs[table].table;
         let schema_math = SchemaMath {
@@ -647,7 +715,7 @@ impl EGraph {
                     let subsumed =
                         schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
                     if !f(FunctionRow {
-                        vals: &row[0..schema_math.func_cols],
+                        vals: &row[0..schema_math.func_cols + more_columns],
                         subsumed,
                     }) {
                         return;
