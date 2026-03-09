@@ -13,6 +13,16 @@ pub struct SerializeConfig {
     // Root eclasses to include in the output
     pub root_eclasses: Vec<(ArcSort, Value)>,
 }
+#[derive(Debug, Clone)]
+pub struct RawEGraphNode<I, BS, O> {
+    pub inputs_complex: Vec<I>, // inputs as complex
+    pub basics: BS,             // inputs as basic
+    pub output: O,              // output
+    pub term: Option<Value>,    // term
+    pub subsumed: bool,         // is subsumed
+    pub class_name: egraph_serialize::ClassId,
+    pub node_name: egraph_serialize::NodeId,
+}
 
 /// Output of serializing an e-graph, including values that were omitted if any.
 pub struct SerializeOutput {
@@ -249,6 +259,12 @@ impl EGraph {
         use numeric_id::NumericId;
         format!("{}-{}", sort.name(), value.rep()).into()
     }
+    pub fn is_base_sort(&self, sort: &ArcSort) -> bool {
+        match sort.column_ty(&self.backend) {
+            ColumnTy::Id => false,
+            ColumnTy::Base(_) => true,
+        }
+    }
 
     /// Gets the value for a serialized class ID.
     pub fn class_id_to_value(&self, eclass_id: &egraph_serialize::ClassId) -> Value {
@@ -396,6 +412,81 @@ impl EGraph {
             },
         );
         node_id
+    }
+    pub fn serialize_tracing_raw(
+        &self,
+        config: SerializeConfig,
+    ) -> HashMap<String, Vec<RawEGraphNode<Value, (), Value>>> {
+        // First collect a list of all the calls we want to serialize
+        let all_calls = self
+            .functions
+            .iter()
+            .map(|(name, function)| {
+                let mut tuples = vec![];
+                self.backend
+                    .for_each_while_with_tracing(function.backend_id, |row| {
+                        if tuples.len() >= config.max_calls_per_function.unwrap_or(usize::MAX) {
+                            return false;
+                        }
+                        let (out, inps) = row.vals[0..row.vals.len() - 2].split_last().unwrap();
+                        tuples.push(RawEGraphNode {
+                            inputs_complex: inps.to_vec(),
+                            output: *out,
+                            term: Some(row.vals[inps.len() + 2]),
+                            subsumed: row.subsumed,
+                            class_name: self.value_to_class_id(&function.schema.output, *out),
+                            node_name: self.to_node_id(
+                                None,
+                                SerializedNode::Function {
+                                    name: name.clone(),
+                                    offset: tuples.len(),
+                                },
+                            ),
+                            basics: (),
+                        });
+                        true
+                    });
+                (name.clone(), tuples)
+            })
+            .collect();
+        all_calls
+    }
+    pub fn serialize_raw(
+        &self,
+        config: SerializeConfig,
+    ) -> HashMap<String, Vec<RawEGraphNode<Value, (), Value>>> {
+        // First collect a list of all the calls we want to serialize
+        let all_calls = self
+            .functions
+            .iter()
+            .map(|(name, function)| {
+                let mut tuples = vec![];
+                self.backend.for_each_while(function.backend_id, |row| {
+                    if tuples.len() >= config.max_calls_per_function.unwrap_or(usize::MAX) {
+                        return false;
+                    }
+                    let (out, inps) = row.vals.split_last().unwrap();
+                    tuples.push(RawEGraphNode {
+                        inputs_complex: inps.to_vec(),
+                        output: *out,
+                        term: None,
+                        subsumed: row.subsumed,
+                        class_name: self.value_to_class_id(&function.schema.output, *out),
+                        node_name: self.to_node_id(
+                            None,
+                            SerializedNode::Function {
+                                name: name.clone(),
+                                offset: tuples.len(),
+                            },
+                        ),
+                        basics: (),
+                    });
+                    true
+                });
+                (name.clone(), tuples)
+            })
+            .collect();
+        all_calls
     }
 }
 

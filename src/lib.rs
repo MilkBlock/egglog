@@ -50,18 +50,20 @@ use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
 pub use egglog_bridge::FunctionRow;
+pub use egglog_bridge::RuleId;
 use egglog_bridge::{ColumnTy, QueryEntry};
-use egglog_core_relations as core_relations;
+use egglog_core_relations::{self as core_relations, BaseValuePrinter};
 use egglog_numeric_id as numeric_id;
-use egglog_reports::{ReportLevel, RunReport};
-use extract::{DefaultCost, Extractor, TreeAdditiveCostModel};
+pub use egglog_reports::{ReportLevel, RunReport};
+use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
+pub use numeric_id::NumericId;
 use prelude::*;
 pub use proofs::proof_encoding_helpers::{file_supports_proofs, program_supports_proofs};
 use scheduler::{SchedulerId, SchedulerRecord};
-pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};
+pub use serialize::{RawEGraphNode, SerializeConfig, SerializeOutput, SerializedNode};
 use sort::*;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
@@ -260,6 +262,48 @@ pub struct EGraph {
     proof_state: EncodingState,
     /// In proof mode, this is the program before proof instrumentation and the version we use for proof checking.
     proof_check_program: Vec<ResolvedNCommand>,
+}
+impl EGraph {
+    pub fn base_value_print(&self, base_value: Value, sort: &ArcSort) -> String {
+        let primitive_id = self
+            .backend
+            .base_values()
+            .get_ty_by_id(sort.value_type().unwrap());
+
+        let formatted_val = BaseValuePrinter {
+            base: self.backend.base_values(),
+            ty: primitive_id,
+            val: base_value,
+        };
+        format!("{:?}", formatted_val)
+    }
+    /// Get all rules in the EGraph.
+    ///
+    /// Returns a vector of tuples containing rule IDs and their descriptions.
+    pub fn get_all_rules(&self) -> Vec<(RuleId, &str)> {
+        self.backend.get_all_rules()
+    }
+
+    /// Get information about a specific rule.
+    ///
+    /// Returns the rule description if the rule exists.
+    pub fn get_rule_info(&self, rule_id: RuleId) -> Option<&str> {
+        self.backend.get_rule_info(rule_id)
+    }
+
+    /// Get all rulesets (collections of rules) in the EGraph.
+    ///
+    /// Returns a vector of tuples containing ruleset names and their corresponding rule IDs.
+    pub fn get_all_rulesets(&self) -> Vec<(String, Vec<RuleId>)> {
+        self.backend.get_all_rulesets()
+    }
+
+    /// Get a specific ruleset by name.
+    ///
+    /// Returns the rule IDs in the ruleset if it exists.
+    pub fn get_ruleset(&self, name: &str) -> Option<Vec<RuleId>> {
+        self.backend.get_ruleset(name)
+    }
 }
 
 /// A user-defined command allows users to inject custom command that can be called

@@ -523,23 +523,31 @@ pub fn rust_rule(
 ) -> Result<Vec<CommandOutput>, Error> {
     let prim_name = egraph.parser.symbol_gen.fresh("rust_rule_prim");
     let panic_id = egraph.backend.new_panic(format!("{prim_name}_panic"));
-    egraph.add_primitive(RustRuleRhs {
-        name: prim_name.clone(),
-        inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
-        union_action: egglog_bridge::UnionAction::new(&egraph.backend),
-        table_actions: egraph
-            .functions
-            .iter()
-            .map(|(k, v)| {
-                (
-                    k.clone(),
-                    egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
-                )
-            })
-            .collect(),
-        panic_id,
-        func,
+    let rust_rule_validator: PrimitiveValidator = std::sync::Arc::new(|termdag, _args| {
+        // rust_rule callbacks perform side effects and return Unit.
+        // This validator only checks/outputs the Unit result term.
+        Some(termdag.lit(egglog_ast::generic_ast::Literal::Unit))
     });
+    egraph.add_primitive_with_validator(
+        RustRuleRhs {
+            name: prim_name.clone(),
+            inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
+            union_action: egglog_bridge::UnionAction::new(&egraph.backend),
+            table_actions: egraph
+                .functions
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
+                    )
+                })
+                .collect(),
+            panic_id,
+            func,
+        },
+        Some(rust_rule_validator),
+    );
 
     let rule = Rule {
         span: span!(),

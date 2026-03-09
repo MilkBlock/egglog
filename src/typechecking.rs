@@ -171,6 +171,9 @@ impl EGraph {
     where
         T: Clone + Primitive + Send + Sync + 'static,
     {
+        let mirror_x = x.clone();
+        let mirror_validator = validator.clone();
+
         // We need to use a wrapper because of the orphan rule.
         // If we just try to implement `ExternalFunction` directly on
         // all `PrimitiveLike`s then it would be possible for a
@@ -194,6 +197,12 @@ impl EGraph {
                 id,
                 validator,
             });
+
+        // In proofs mode, keep the "original typechecking" egraph in sync.
+        // Otherwise proof pre-typechecking cannot resolve freshly added primitives.
+        if let Some(original) = self.proof_state.original_typechecking.as_mut() {
+            original.add_primitive_with_validator(mirror_x, mirror_validator);
+        }
     }
 
     pub(crate) fn typecheck_program(
