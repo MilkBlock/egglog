@@ -1843,6 +1843,26 @@ impl EGraph {
         self.backend
             .get_canon_repr(val, sort.column_ty(&self.backend))
     }
+
+    /// Build and pretty-print a proof that two e-graph values are equal.
+    ///
+    /// Returns the printed proof text.
+    pub fn explain_terms_equal_pretty(&mut self, lhs: Value, rhs: Value) -> Result<String, Error> {
+        let mut proof_store = egglog_bridge::ProofStore::default();
+        let proof_id = self
+            .backend
+            .explain_terms_equal(lhs, rhs, &mut proof_store)
+            .map_err(|e| Error::BackendError(e.to_string()))?;
+        let mut out = Vec::<u8>::new();
+        proof_store
+            .print_eq_proof_pretty(
+                proof_id,
+                &egglog_bridge::proof_format::PrettyPrintConfig::default(),
+                &mut out,
+            )
+            .map_err(|e| Error::BackendError(e.to_string()))?;
+        String::from_utf8(out).map_err(|e| Error::BackendError(e.to_string()))
+    }
 }
 
 struct BackendRule<'a> {
