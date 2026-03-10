@@ -2217,7 +2217,7 @@ impl EGraph {
             .clone();
 
         let extractor = Extractor::compute_costs_from_rootsorts_allow_unextractable(
-            None,
+            Some(vec![proof_sort.clone()]),
             self,
             TreeAdditiveCostModel::default(),
         );
