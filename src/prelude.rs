@@ -628,6 +628,10 @@ pub fn rust_rule(
         // This validator only checks/outputs the Unit result term.
         Some(termdag.lit(egglog_ast::generic_ast::Literal::Unit))
     });
+
+    // This is the actual rule name that will appear in the proof-check program.
+    // Any `Rule` proof terms we synthesize must use this exact string.
+    let fresh_rule_name = egraph.parser.symbol_gen.fresh(rule_name);
     let table_actions: HashMap<String, egglog_bridge::TableAction> = egraph
         .functions
         .iter()
@@ -764,7 +768,7 @@ pub fn rust_rule(
     egraph.add_primitive_with_validator(
         RustRuleRhs {
             name: prim_name.clone(),
-            rule_name: rule_name.to_owned(),
+            rule_name: fresh_rule_name.clone(),
             inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
             union_action: egglog_bridge::UnionAction::new(&egraph.backend),
             table_actions,
@@ -792,7 +796,7 @@ pub fn rust_rule(
             ),
         )]),
         body: facts.0,
-        name: egraph.parser.symbol_gen.fresh(rule_name),
+        name: fresh_rule_name,
         ruleset: ruleset.into(),
     };
 
