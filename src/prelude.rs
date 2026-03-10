@@ -341,6 +341,12 @@ pub struct RustRuleContext<'a, 'b> {
     to_ast_actions: HashMap<String, egglog_bridge::TableAction>,
     /// Fiat constructor for the proof datatype (when proofs are enabled).
     fiat_action: Option<egglog_bridge::TableAction>,
+    /// Rule constructor for the proof datatype (when proofs are enabled).
+    rule_action: Option<egglog_bridge::TableAction>,
+    /// Empty proof list constructor `PNil` (when proofs are enabled).
+    pnil_action: Option<egglog_bridge::TableAction>,
+    /// The user-provided rule name (for tagging proof terms).
+    rule_name: String,
     /// Output sort name for surface constructors (e.g. `Const` -> `Expr`).
     term_output_sorts: HashMap<String, String>,
     panic_id: ExternalFunctionId,
@@ -424,7 +430,18 @@ impl RustRuleContext<'_, '_> {
         }
 
         let ast = to_ast.lookup(self.exec_state, &[out])?;
-        let proof = fiat.lookup(self.exec_state, &[ast, ast])?;
+        let proof = if let (Some(rule), Some(pnil)) =
+            (self.rule_action.clone(), self.pnil_action.clone())
+        {
+            let name_val = self
+                .exec_state
+                .base_values()
+                .get::<crate::sort::S>(self.rule_name.clone().into());
+            let empty = pnil.lookup(self.exec_state, &[])?;
+            rule.lookup(self.exec_state, &[name_val, empty, ast, ast])?
+        } else {
+            fiat.lookup(self.exec_state, &[ast, ast])?
+        };
         term_proof.insert(self.exec_state, [out, proof].into_iter());
         Some(proof)
     }
@@ -467,6 +484,7 @@ impl RustRuleContext<'_, '_> {
 #[derive(Clone)]
 struct RustRuleRhs<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> {
     name: String,
+    rule_name: String,
     inputs: Vec<ArcSort>,
     union_action: egglog_bridge::UnionAction,
     table_actions: HashMap<String, egglog_bridge::TableAction>,
@@ -475,6 +493,8 @@ struct RustRuleRhs<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> {
     term_proof_actions: HashMap<String, egglog_bridge::TableAction>,
     to_ast_actions: HashMap<String, egglog_bridge::TableAction>,
     fiat_action: Option<egglog_bridge::TableAction>,
+    rule_action: Option<egglog_bridge::TableAction>,
+    pnil_action: Option<egglog_bridge::TableAction>,
     term_output_sorts: HashMap<String, String>,
     panic_id: ExternalFunctionId,
     func: F,
@@ -505,6 +525,9 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
             term_proof_actions: self.term_proof_actions.clone(),
             to_ast_actions: self.to_ast_actions.clone(),
             fiat_action: self.fiat_action.clone(),
+            rule_action: self.rule_action.clone(),
+            pnil_action: self.pnil_action.clone(),
+            rule_name: self.rule_name.clone(),
             term_output_sorts: self.term_output_sorts.clone(),
             panic_id: self.panic_id,
         };
@@ -643,6 +666,19 @@ pub fn rust_rule(
                 .then(|| egglog_bridge::TableAction::new(&egraph.backend, v.backend_id))
         })
     });
+    let rule_action = proof_sort.as_ref().and_then(|proof_sort| {
+        egraph.functions.iter().find_map(|(k, v)| {
+            (k.contains("Rule")
+                && &v.decl.schema.output == proof_sort
+                && v.decl.schema.input.len() == 4
+                && v.decl.schema.input.first().is_some_and(|s| s == "String"))
+                .then(|| egglog_bridge::TableAction::new(&egraph.backend, v.backend_id))
+        })
+    });
+    let pnil_action = egraph.functions.iter().find_map(|(k, v)| {
+        (k.contains("PNil") && v.decl.schema.input.is_empty())
+            .then(|| egglog_bridge::TableAction::new(&egraph.backend, v.backend_id))
+    });
 
     let term_output_sorts: HashMap<String, String> = view_actions
         .keys()
@@ -728,6 +764,7 @@ pub fn rust_rule(
     egraph.add_primitive_with_validator(
         RustRuleRhs {
             name: prim_name.clone(),
+            rule_name: rule_name.to_owned(),
             inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
             union_action: egglog_bridge::UnionAction::new(&egraph.backend),
             table_actions,
@@ -736,6 +773,8 @@ pub fn rust_rule(
             term_proof_actions,
             to_ast_actions,
             fiat_action,
+            rule_action,
+            pnil_action,
             term_output_sorts,
             panic_id,
             func,

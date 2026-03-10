@@ -2354,7 +2354,6 @@ impl EGraph {
                     return Ok(proof_store.proof_to_string(proof_id));
                 }
             }
-
             // Fallback: if there is no stored proof value for `lhs = lhs`, return a trivial Fiat proof.
             // (egglog proofs are not reflexive by default, and UFProof may not contain self-edges.)
             let extractor = Extractor::compute_costs_from_rootsorts_allow_unextractable(
@@ -2370,7 +2369,7 @@ impl EGraph {
                         "failed to extract a term for reflexive proof value {lhs:?} (sort={})",
                         sort.name()
                     ))
-                })?;
+            })?;
             let term_str = termdag.to_string(term_id);
             return Ok(format!("(Fiat (= {term_str} {term_str}))"));
         }
