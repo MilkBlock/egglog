@@ -323,6 +323,15 @@ pub struct RustRuleContext<'a, 'b> {
     exec_state: &'a mut ExecutionState<'b>,
     union_action: egglog_bridge::UnionAction,
     table_actions: HashMap<String, egglog_bridge::TableAction>,
+    /// When term encoding is enabled, functions/constructors are backed by a hidden "term table"
+    /// and a separate "view table" (see proofs/term-encoding).
+    ///
+    /// For a function `f`, the view table is a function whose `:term-constructor` is `f`.
+    /// This map is keyed by the surface `f` name and points to the view table action.
+    ///
+    /// Rust-side `lookup(f, ...)` must populate both tables; otherwise rules (which are
+    /// instrumented to match on view tables) will observe zero matches.
+    view_actions: HashMap<String, egglog_bridge::TableAction>,
     panic_id: ExternalFunctionId,
 }
 
@@ -361,7 +370,21 @@ impl RustRuleContext<'_, '_> {
     /// Do a table lookup. This is potentially a mutable operation!
     /// For more information, see `egglog_bridge::TableAction::lookup`.
     pub fn lookup(&mut self, table: &str, key: &[Value]) -> Option<Value> {
-        self.get_table_action(table).lookup(self.exec_state, key)
+        let out = self.get_table_action(table).lookup(self.exec_state, key);
+
+        // In term-encoding mode, view tables store canonicalized e-nodes and are used for matching.
+        // `lookup` on the term table must also ensure the corresponding view entry exists.
+        if let Some(out) = out {
+            if let Some(view) = self.view_actions.get(table) {
+                let mut view_key = Vec::with_capacity(key.len() + 1);
+                view_key.extend_from_slice(key);
+                view_key.push(out);
+                let _ = view.clone().lookup(self.exec_state, &view_key);
+            }
+            Some(out)
+        } else {
+            None
+        }
     }
 
     /// Union two values in the e-graph.
@@ -405,6 +428,7 @@ struct RustRuleRhs<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> {
     inputs: Vec<ArcSort>,
     union_action: egglog_bridge::UnionAction,
     table_actions: HashMap<String, egglog_bridge::TableAction>,
+    view_actions: HashMap<String, egglog_bridge::TableAction>,
     panic_id: ExternalFunctionId,
     func: F,
 }
@@ -429,6 +453,7 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
             exec_state,
             union_action: self.union_action,
             table_actions: self.table_actions.clone(),
+            view_actions: self.view_actions.clone(),
             panic_id: self.panic_id,
         };
         (self.func)(&mut context, values)?;
@@ -535,6 +560,18 @@ pub fn rust_rule(
                     k.clone(),
                     egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
                 )
+            })
+            .collect(),
+        view_actions: egraph
+            .functions
+            .iter()
+            .filter_map(|(_k, v)| {
+                v.decl.term_constructor.as_ref().map(|term_name| {
+                    (
+                        term_name.clone(),
+                        egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
+                    )
+                })
             })
             .collect(),
         panic_id,
