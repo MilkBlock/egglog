@@ -2231,6 +2231,10 @@ impl EGraph {
                 ))
             })?;
 
+        // The composed proof term may introduce fresh constructor rows (Sym/Trans/etc.).
+        // Make them visible to extraction before we attempt to reconstruct the termdag.
+        self.backend.flush_updates();
+
         let (mut proof_store, proof_id) = proofs::proof_format::proof_store_from_term(
             &self.proof_state.proof_names,
             termdag,
