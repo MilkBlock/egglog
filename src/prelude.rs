@@ -332,6 +332,17 @@ pub struct RustRuleContext<'a, 'b> {
     /// Rust-side `lookup(f, ...)` must populate both tables; otherwise rules (which are
     /// instrumented to match on view tables) will observe zero matches.
     view_actions: HashMap<String, egglog_bridge::TableAction>,
+    /// View proof functions: for each surface term constructor name `f`, this stores the
+    /// `{f}ViewProof` table action (when proofs are enabled).
+    view_proof_actions: HashMap<String, egglog_bridge::TableAction>,
+    /// Term proof functions: for each eq sort name `S`, this stores the `{S}Proof` table action.
+    term_proof_actions: HashMap<String, egglog_bridge::TableAction>,
+    /// Sort-to-AST constructors: for each sort name `S`, this stores the `Ast{S}` constructor action.
+    to_ast_actions: HashMap<String, egglog_bridge::TableAction>,
+    /// Fiat constructor for the proof datatype (when proofs are enabled).
+    fiat_action: Option<egglog_bridge::TableAction>,
+    /// Output sort name for surface constructors (e.g. `Const` -> `Expr`).
+    term_output_sorts: HashMap<String, String>,
     panic_id: ExternalFunctionId,
 }
 
@@ -373,18 +384,49 @@ impl RustRuleContext<'_, '_> {
         let out = self.get_table_action(table).lookup(self.exec_state, key);
 
         // In term-encoding mode, view tables store canonicalized e-nodes and are used for matching.
-        // `lookup` on the term table must also ensure the corresponding view entry exists.
+        // `lookup` on the term table must also ensure:
+        // - the corresponding view entry exists, and
+        // - (in proofs mode) the corresponding view proof / term proof entries exist,
+        //   since instrumented rules query them as part of their match.
         if let Some(out) = out {
             if let Some(view) = self.view_actions.get(table) {
                 let mut view_key = Vec::with_capacity(key.len() + 1);
                 view_key.extend_from_slice(key);
                 view_key.push(out);
                 let _ = view.clone().lookup(self.exec_state, &view_key);
+
+                if let Some(proof) = self.mk_fiat_term_proof(table, out) {
+                    if let Some(view_proof) = self.view_proof_actions.get(table) {
+                        let row = view_key
+                            .iter()
+                            .copied()
+                            .chain(std::iter::once(proof));
+                        let mut view_proof = view_proof.clone();
+                        view_proof.insert(self.exec_state, row);
+                    }
+                }
             }
             Some(out)
         } else {
             None
         }
+    }
+
+    fn mk_fiat_term_proof(&mut self, table: &str, out: Value) -> Option<Value> {
+        let sort_name = self.term_output_sorts.get(table)?.clone();
+        let mut term_proof = self.term_proof_actions.get(&sort_name).cloned()?;
+        let to_ast = self.to_ast_actions.get(&sort_name).cloned()?;
+        let fiat = self.fiat_action.clone()?;
+
+        // Reuse existing term proof if present.
+        if let Some(existing) = term_proof.lookup(self.exec_state, &[out]) {
+            return Some(existing);
+        }
+
+        let ast = to_ast.lookup(self.exec_state, &[out])?;
+        let proof = fiat.lookup(self.exec_state, &[ast, ast])?;
+        term_proof.insert(self.exec_state, [out, proof].into_iter());
+        Some(proof)
     }
 
     /// Union two values in the e-graph.
@@ -429,6 +471,11 @@ struct RustRuleRhs<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> {
     union_action: egglog_bridge::UnionAction,
     table_actions: HashMap<String, egglog_bridge::TableAction>,
     view_actions: HashMap<String, egglog_bridge::TableAction>,
+    view_proof_actions: HashMap<String, egglog_bridge::TableAction>,
+    term_proof_actions: HashMap<String, egglog_bridge::TableAction>,
+    to_ast_actions: HashMap<String, egglog_bridge::TableAction>,
+    fiat_action: Option<egglog_bridge::TableAction>,
+    term_output_sorts: HashMap<String, String>,
     panic_id: ExternalFunctionId,
     func: F,
 }
@@ -454,6 +501,11 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
             union_action: self.union_action,
             table_actions: self.table_actions.clone(),
             view_actions: self.view_actions.clone(),
+            view_proof_actions: self.view_proof_actions.clone(),
+            term_proof_actions: self.term_proof_actions.clone(),
+            to_ast_actions: self.to_ast_actions.clone(),
+            fiat_action: self.fiat_action.clone(),
+            term_output_sorts: self.term_output_sorts.clone(),
             panic_id: self.panic_id,
         };
         (self.func)(&mut context, values)?;
@@ -553,35 +605,138 @@ pub fn rust_rule(
         // This validator only checks/outputs the Unit result term.
         Some(termdag.lit(egglog_ast::generic_ast::Literal::Unit))
     });
+    let table_actions: HashMap<String, egglog_bridge::TableAction> = egraph
+        .functions
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
+            )
+        })
+        .collect();
+
+    // term constructor name -> view table action
+    let view_actions: HashMap<String, egglog_bridge::TableAction> = egraph
+        .functions
+        .iter()
+        .filter_map(|(_k, v)| {
+            v.decl.term_constructor.as_ref().map(|term_name| {
+                (
+                    term_name.clone(),
+                    egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
+                )
+            })
+        })
+        .collect();
+
+    // best-effort proof wiring (only used when proofs+term encoding are enabled)
+    let proof_sort = egraph
+        .functions
+        .iter()
+        .find_map(|(k, v)| {
+            (k.contains("ViewProof") && v.decl.schema.output != "Unit").then(|| v.decl.schema.output.clone())
+        });
+    let fiat_action = proof_sort.as_ref().and_then(|proof_sort| {
+        egraph.functions.iter().find_map(|(k, v)| {
+            (k.contains("Fiat") && &v.decl.schema.output == proof_sort)
+                .then(|| egglog_bridge::TableAction::new(&egraph.backend, v.backend_id))
+        })
+    });
+
+    let term_output_sorts: HashMap<String, String> = view_actions
+        .keys()
+        .filter_map(|term_name| {
+            egraph
+                .functions
+                .get(term_name)
+                .map(|f| (term_name.clone(), f.decl.schema.output.clone()))
+        })
+        .collect();
+
+    let to_ast_actions: HashMap<String, egglog_bridge::TableAction> = term_output_sorts
+        .values()
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .filter_map(|sort_name| {
+            let needle = format!("Ast{sort_name}");
+            egraph.functions.iter().find_map(|(k, v)| {
+                (k.contains(&needle) && v.decl.schema.input.as_slice() == [sort_name.as_str()])
+                    .then(|| {
+                        (
+                            sort_name.to_string(),
+                            egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
+                        )
+                    })
+            })
+        })
+        .collect();
+
+    let term_proof_actions: HashMap<String, egglog_bridge::TableAction> = proof_sort
+        .as_ref()
+        .map(|proof_sort| {
+            term_output_sorts
+                .values()
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .filter_map(|sort_name| {
+                    let needle = format!("{sort_name}Proof");
+                    egraph.functions.iter().find_map(|(k, v)| {
+                        (k.contains(&needle)
+                            && !k.contains("ViewProof")
+                            && v.decl.schema.input.as_slice() == [sort_name.as_str()]
+                            && &v.decl.schema.output == proof_sort)
+                            .then(|| {
+                                (
+                                    sort_name.to_string(),
+                                    egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
+                                )
+                            })
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let view_proof_actions: HashMap<String, egglog_bridge::TableAction> = proof_sort
+        .as_ref()
+        .map(|proof_sort| {
+            view_actions
+                .keys()
+                .filter_map(|term_name| {
+                    let needle = format!("{term_name}ViewProof");
+                    egraph.functions.iter().find_map(|(k, v)| {
+                        (k.contains(&needle)
+                            && v.decl.schema.output == *proof_sort
+                            && v.decl.schema.input.len() == (egraph
+                                .functions
+                                .get(term_name)
+                                .map(|f| f.decl.schema.input.len() + 1)
+                                .unwrap_or(0)))
+                            .then(|| {
+                                (
+                                    term_name.clone(),
+                                    egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
+                                )
+                            })
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     egraph.add_primitive_with_validator(
         RustRuleRhs {
             name: prim_name.clone(),
             inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
             union_action: egglog_bridge::UnionAction::new(&egraph.backend),
-            table_actions: {
-                egraph
-                    .functions
-                    .iter()
-                    .map(|(k, v)| {
-                        (
-                            k.clone(),
-                            egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
-                        )
-                    })
-                    .collect()
-            },
-            view_actions: egraph
-                .functions
-                .iter()
-                .filter_map(|(_k, v)| {
-                    v.decl.term_constructor.as_ref().map(|term_name| {
-                        (
-                            term_name.clone(),
-                            egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
-                        )
-                    })
-                })
-                .collect(),
+            table_actions,
+            view_actions,
+            view_proof_actions,
+            term_proof_actions,
+            to_ast_actions,
+            fiat_action,
+            term_output_sorts,
             panic_id,
             func,
         },
