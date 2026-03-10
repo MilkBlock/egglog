@@ -1956,14 +1956,16 @@ impl EGraph {
             termdag.get(term)
         );
         let expr_head = expr_src.trim();
-        if !expr_head.is_empty()
-            && expr_head
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-        {
+        eprintln!("[probe:t21] expr_src={expr_head}");
+        let atom_head = expr_head
+            .strip_prefix('(')
+            .and_then(|s| s.strip_suffix(')'))
+            .unwrap_or(expr_head)
+            .trim();
+        if !atom_head.is_empty() {
             eprintln!(
-                "[probe:t21] expr_head={expr_head} func_type_exists={}",
-                self.type_info.get_func_type(expr_head).is_some()
+                "[probe:t21] atom_head={atom_head} func_type_exists={}",
+                self.type_info.get_func_type(atom_head).is_some()
             );
         }
 
