@@ -1864,6 +1864,105 @@ impl EGraph {
         String::from_utf8(out).map_err(|e| Error::BackendError(e.to_string()))
     }
 
+    /// Build and pretty-print an equality proof between two values using proofs-mode UF proof tables.
+    ///
+    /// This bypasses `(prove ...)` parsing/typechecking and reads proof terms directly from
+    /// the generated `*UFProof` table for the given sort.
+    pub fn prove_values_equal_pretty(
+        &mut self,
+        sort_name: &str,
+        lhs: Value,
+        rhs: Value,
+    ) -> Result<String, Error> {
+        if !self.are_proofs_enabled() {
+            return Err(Error::BackendError(
+                "prove_values_equal_pretty requires EGraph::new_with_proofs".into(),
+            ));
+        }
+        let sort = self
+            .get_sort_by_name(sort_name)
+            .ok_or_else(|| Error::TypeError(TypeError::Unbound(sort_name.into(), span!())))?
+            .clone();
+        if !sort.is_eq_sort() {
+            return Err(Error::BackendError(format!(
+                "prove_values_equal_pretty requires eq sort, got {}",
+                sort.name()
+            )));
+        }
+
+        let lhs_canon = self.get_canonical_value(lhs, &sort);
+        let rhs_canon = self.get_canonical_value(rhs, &sort);
+        if lhs_canon != rhs_canon {
+            return Err(Error::BackendError(format!(
+                "cannot prove equality: values are in different e-classes ({lhs:?} -> {lhs_canon:?}, {rhs:?} -> {rhs_canon:?})"
+            )));
+        }
+
+        let uf_proof_name = self
+            .proof_state
+            .proof_names
+            .uf_proof_name
+            .get(sort.name())
+            .ok_or_else(|| {
+                Error::BackendError(format!(
+                    "no UF proof table registered for sort {}",
+                    sort.name()
+                ))
+            })?
+            .clone();
+
+        let key_candidates = [
+            [lhs, rhs],
+            [rhs, lhs],
+            [lhs_canon, rhs_canon],
+            [rhs_canon, lhs_canon],
+        ];
+        let proof_value = key_candidates
+            .into_iter()
+            .find_map(|key| self.lookup_function(&uf_proof_name, &key))
+            .ok_or_else(|| {
+                Error::BackendError(format!(
+                    "no UF proof value found in {} for {:?} and {:?}",
+                    uf_proof_name, lhs, rhs
+                ))
+            })?;
+
+        let proof_sort = self
+            .functions
+            .get(&uf_proof_name)
+            .ok_or_else(|| {
+                Error::BackendError(format!("UF proof function {} is not declared", uf_proof_name))
+            })?
+            .schema
+            .output
+            .clone();
+
+        let extractor = Extractor::compute_costs_from_rootsorts_allow_unextractable(
+            None,
+            self,
+            TreeAdditiveCostModel::default(),
+        );
+        let mut termdag = TermDag::default();
+        let (_, proof_term_id) = extractor
+            .extract_best_with_sort(self, &mut termdag, proof_value, proof_sort)
+            .ok_or_else(|| {
+                Error::BackendError(format!(
+                    "failed to extract proof term from {} for values {:?} and {:?}",
+                    uf_proof_name, lhs, rhs
+                ))
+            })?;
+
+        let (mut proof_store, proof_id) = proofs::proof_format::proof_store_from_term(
+            &self.proof_state.proof_names,
+            termdag,
+            proof_term_id,
+            &self.proof_check_program,
+        );
+        // Keep user-facing proof readable by removing internal globals.
+        let _ = proof_store.remove_globals(&self.proof_check_program);
+        Ok(proof_store.proof_to_string(proof_id))
+    }
+
     /// Reconstruct an expression string for a value, even if it is marked unextractable.
     ///
     /// This is primarily useful in proofs mode, where term roots can be unextractable under
@@ -1951,24 +2050,6 @@ impl EGraph {
             &mut binding_program,
             move |_| hint.clone(),
         );
-        eprintln!(
-            "[probe:t21] sort={sort_name} value={value:?} root_term={:?}",
-            termdag.get(term)
-        );
-        let expr_head = expr_src.trim();
-        eprintln!("[probe:t21] expr_src={expr_head}");
-        let atom_head = expr_head
-            .strip_prefix('(')
-            .and_then(|s| s.strip_suffix(')'))
-            .unwrap_or(expr_head)
-            .trim();
-        if !atom_head.is_empty() {
-            let func_ty = self.type_info.get_func_type(atom_head);
-            eprintln!(
-                "[probe:t21] atom_head={atom_head} func_type={func_ty:?}"
-            );
-        }
-
         let bindings = if binding_program.trim().is_empty() {
             vec![]
         } else {
