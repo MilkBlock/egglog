@@ -1613,6 +1613,47 @@ impl EGraph {
         })
     }
 
+    fn proof_mk_rule_value_empty_premises(
+        &mut self,
+        sort_name: &str,
+        lhs: Value,
+        rhs: Value,
+        rule_name: &str,
+    ) -> Result<Value, Error> {
+        if !self.are_proofs_enabled() {
+            return Err(Error::BackendError(
+                "proof_mk_rule_value_empty_premises requires EGraph::new_with_proofs".into(),
+            ));
+        }
+
+        let to_ast_name = self.proof_to_ast_constructor(sort_name)?.to_string();
+        let rule_ctor_name = self.proof_state.proof_names.rule_constructor.clone();
+        let pnil_name = self.proof_state.proof_names.pnil.clone();
+        let to_ast_id = self.proof_backend_id(&to_ast_name)?;
+        let rule_ctor_id = self.proof_backend_id(&rule_ctor_name)?;
+        let pnil_id = self.proof_backend_id(&pnil_name)?;
+
+        let rule_name_val = self
+            .backend
+            .base_values()
+            .get::<S>(rule_name.to_string().into());
+
+        let proof_val = self.backend.with_execution_state(|state| {
+            let to_ast = egglog_bridge::TableAction::new(&self.backend, to_ast_id);
+            let pnil = egglog_bridge::TableAction::new(&self.backend, pnil_id);
+            let rule_ctor = egglog_bridge::TableAction::new(&self.backend, rule_ctor_id);
+
+            let ast_lhs = to_ast.lookup(state, &[lhs])?;
+            let ast_rhs = to_ast.lookup(state, &[rhs])?;
+            let proof_list = pnil.lookup(state, &[])?;
+            let proof = rule_ctor.lookup(state, &[rule_name_val, proof_list, ast_lhs, ast_rhs])?;
+            Some(proof)
+        });
+        proof_val.ok_or_else(|| {
+            Error::BackendError("failed to construct Rule proof term value".into())
+        })
+    }
+
     /// In proofs mode, add a proof-carrying self-edge for a value `v` of `sort_name`.
     ///
     /// This writes to:
@@ -1647,6 +1688,45 @@ impl EGraph {
             let _ = uf.lookup(state, &[v, v]);
             uf_proof.insert(state, [v, v, fiat].into_iter());
             term_proof.insert(state, [v, fiat].into_iter());
+            Some(self.backend.base_values().get(()))
+        });
+        self.backend.flush_updates();
+        Ok(())
+    }
+
+    /// In proofs mode, record a Rule equality proof for `a = b` on `sort_name` with empty premises.
+    ///
+    /// This writes to `{sort}UF` and `{sort}UFProof` using the canonical orientation
+    /// `(larger -> smaller)`, matching proof encoding.
+    pub fn proof_union_rule(
+        &mut self,
+        sort_name: &str,
+        a: Value,
+        b: Value,
+        rule_name: &str,
+    ) -> Result<(), Error> {
+        if !self.are_proofs_enabled() {
+            return Err(Error::BackendError(
+                "proof_union_rule requires EGraph::new_with_proofs".into(),
+            ));
+        }
+
+        let (smaller, larger) = if a <= b { (a, b) } else { (b, a) };
+
+        let uf_name = self.proof_uf_name(sort_name)?.to_string();
+        let uf_proof_name = self.proof_uf_proof_name(sort_name)?.to_string();
+        let uf_id = self.proof_backend_id(&uf_name)?;
+        let uf_proof_id = self.proof_backend_id(&uf_proof_name)?;
+
+        let proof =
+            self.proof_mk_rule_value_empty_premises(sort_name, larger, smaller, rule_name)?;
+
+        self.backend.with_execution_state(|state| {
+            let uf = egglog_bridge::TableAction::new(&self.backend, uf_id);
+            let mut uf_proof = egglog_bridge::TableAction::new(&self.backend, uf_proof_id);
+
+            let _ = uf.lookup(state, &[larger, smaller]);
+            uf_proof.insert(state, [larger, smaller, proof].into_iter());
             Some(self.backend.base_values().get(()))
         });
         self.backend.flush_updates();
