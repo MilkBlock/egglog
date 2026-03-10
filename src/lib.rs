@@ -2216,6 +2216,10 @@ impl EGraph {
             .output
             .clone();
 
+        // The composed proof term may introduce fresh constructor rows (Sym/Trans/etc.).
+        // Make them visible to extraction before we attempt to reconstruct the termdag.
+        self.backend.flush_updates();
+
         let extractor = Extractor::compute_costs_from_rootsorts_allow_unextractable(
             Some(vec![proof_sort.clone()]),
             self,
@@ -2230,10 +2234,6 @@ impl EGraph {
                     uf_proof_name, lhs, rhs
                 ))
             })?;
-
-        // The composed proof term may introduce fresh constructor rows (Sym/Trans/etc.).
-        // Make them visible to extraction before we attempt to reconstruct the termdag.
-        self.backend.flush_updates();
 
         let (mut proof_store, proof_id) = proofs::proof_format::proof_store_from_term(
             &self.proof_state.proof_names,
