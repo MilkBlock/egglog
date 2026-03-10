@@ -1951,6 +1951,21 @@ impl EGraph {
             &mut binding_program,
             move |_| hint.clone(),
         );
+        eprintln!(
+            "[probe:t21] sort={sort_name} value={value:?} root_term={:?}",
+            termdag.get(term)
+        );
+        let expr_head = expr_src.trim();
+        if !expr_head.is_empty()
+            && expr_head
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            eprintln!(
+                "[probe:t21] expr_head={expr_head} func_type_exists={}",
+                self.type_info.get_func_type(expr_head).is_some()
+            );
+        }
 
         let bindings = if binding_program.trim().is_empty() {
             vec![]
