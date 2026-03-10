@@ -2152,21 +2152,59 @@ impl EGraph {
             })?
             .clone();
 
-        let key_candidates = [
-            [lhs, rhs],
-            [rhs, lhs],
-            [lhs_canon, rhs_canon],
-            [rhs_canon, lhs_canon],
-        ];
-        let proof_value = key_candidates
-            .into_iter()
-            .find_map(|key| self.lookup_function(&uf_proof_name, &key))
-            .ok_or_else(|| {
+        // Build a proof between arbitrary values by composing UF edge proofs
+        // from each value to the canonical representative.
+        let proof_value = {
+            let rep = lhs_canon;
+
+            let eq_sym_name = self.proof_state.proof_names.eq_sym_constructor.clone();
+            let eq_trans_name = self.proof_state.proof_names.eq_trans_constructor.clone();
+            let eq_sym_id = self.proof_backend_id(&eq_sym_name)?;
+            let eq_trans_id = self.proof_backend_id(&eq_trans_name)?;
+            let uf_proof_id = self.proof_backend_id(&uf_proof_name)?;
+
+            let mk_sym = |state: &mut ExecutionState, proof: Value| -> Option<Value> {
+                let sym = egglog_bridge::TableAction::new(&self.backend, eq_sym_id);
+                sym.lookup(state, &[proof])
+            };
+            let mk_trans =
+                |state: &mut ExecutionState, p1: Value, p2: Value| -> Option<Value> {
+                    let trans = egglog_bridge::TableAction::new(&self.backend, eq_trans_id);
+                    trans.lookup(state, &[p1, p2])
+                };
+            let lookup_uf_proof =
+                |state: &mut ExecutionState, a: Value, b: Value| -> Option<Value> {
+                    let uf_proof = egglog_bridge::TableAction::new(&self.backend, uf_proof_id);
+                    uf_proof.lookup(state, &[a, b])
+                };
+            let prove_eq =
+                |state: &mut ExecutionState, a: Value, b: Value| -> Option<Value> {
+                    if a == b {
+                        return lookup_uf_proof(state, a, b);
+                    }
+                    let (smaller, larger) = if a <= b { (a, b) } else { (b, a) };
+                    let proof = lookup_uf_proof(state, larger, smaller)?;
+                    if larger == a {
+                        Some(proof)
+                    } else {
+                        mk_sym(state, proof)
+                    }
+                };
+
+            let proof = self.backend.with_execution_state(|state| {
+                let lhs_to_rep = prove_eq(state, lhs, rep)?;
+                let rhs_to_rep = prove_eq(state, rhs, rep)?;
+                let rep_to_rhs = mk_sym(state, rhs_to_rep)?;
+                mk_trans(state, lhs_to_rep, rep_to_rhs)
+            });
+
+            proof.ok_or_else(|| {
                 Error::BackendError(format!(
-                    "no UF proof value found in {} for {:?} and {:?}",
-                    uf_proof_name, lhs, rhs
+                    "failed to build equality proof using {} for values {:?} and {:?} (rep={:?})",
+                    uf_proof_name, lhs, rhs, rep
                 ))
-            })?;
+            })?
+        };
 
         let proof_sort = self
             .functions
