@@ -1915,6 +1915,51 @@ impl EGraph {
             .ok_or_else(|| Error::ExpectFail(span.clone()))?;
         Ok(termdag.term_to_expr(&term, span))
     }
+
+    /// Reconstruct a proof-ready expression plus any let-binding commands needed
+    /// to keep it closed in a fresh `(prove ...)` scope.
+    ///
+    /// The returned commands are `Action::Let` bindings (if any), and the returned
+    /// expression can be used directly in `Fact::Eq` after those commands.
+    pub fn extract_expr_with_bindings_allow_unextractable(
+        &mut self,
+        sort_name: &str,
+        value: Value,
+        span: Span,
+        name_hint: &str,
+    ) -> Result<(Vec<Command>, Expr), Error> {
+        let sort = self
+            .get_sort_by_name(sort_name)
+            .ok_or_else(|| Error::TypeError(TypeError::Unbound(sort_name.into(), span.clone())))?
+            .clone();
+        let extractor = Extractor::compute_costs_from_rootsorts_allow_unextractable(
+            Some(vec![sort.clone()]),
+            self,
+            TreeAdditiveCostModel::default(),
+        );
+        let mut termdag = TermDag::default();
+        let (_cost, term) = extractor
+            .extract_best_with_sort(self, &mut termdag, value, sort)
+            .ok_or_else(|| Error::ExpectFail(span.clone()))?;
+
+        let mut fresh = SymbolGen::new(String::new());
+        let mut binding_program = String::new();
+        let hint = name_hint.to_owned();
+        let expr_src = termdag.to_string_with_let_internal(
+            &mut fresh,
+            term,
+            &mut binding_program,
+            move |_| hint.clone(),
+        );
+
+        let bindings = if binding_program.trim().is_empty() {
+            vec![]
+        } else {
+            self.parse_program(None, &binding_program)?
+        };
+        let expr = self.parser.get_expr_from_string(None, &expr_src)?;
+        Ok((bindings, expr))
+    }
 }
 
 struct BackendRule<'a> {
