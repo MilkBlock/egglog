@@ -1889,6 +1889,32 @@ impl EGraph {
         let mut fresh = SymbolGen::new(String::new());
         Ok(termdag.to_string_with_let_and_hint(&mut fresh, term, "expr"))
     }
+
+    /// Reconstruct an expression AST for a value, even if it is marked unextractable.
+    ///
+    /// Unlike `extract_expr_allow_unextractable`, this returns an `Expr` directly,
+    /// avoiding pretty-printer-introduced temporary symbols like `exprN`.
+    pub fn extract_expr_ast_allow_unextractable(
+        &self,
+        sort_name: &str,
+        value: Value,
+        span: Span,
+    ) -> Result<Expr, Error> {
+        let sort = self
+            .get_sort_by_name(sort_name)
+            .ok_or_else(|| Error::TypeError(TypeError::Unbound(sort_name.into(), span.clone())))?
+            .clone();
+        let extractor = Extractor::compute_costs_from_rootsorts_allow_unextractable(
+            Some(vec![sort.clone()]),
+            self,
+            TreeAdditiveCostModel::default(),
+        );
+        let mut termdag = TermDag::default();
+        let (_cost, term) = extractor
+            .extract_best_with_sort(self, &mut termdag, value, sort)
+            .ok_or_else(|| Error::ExpectFail(span.clone()))?;
+        Ok(termdag.term_to_expr(&term, span))
+    }
 }
 
 struct BackendRule<'a> {
