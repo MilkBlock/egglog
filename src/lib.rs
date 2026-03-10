@@ -1886,7 +1886,7 @@ impl EGraph {
         let (_cost, term) = extractor
             .extract_best_with_sort(self, &mut termdag, value, sort)
             .ok_or_else(|| Error::ExpectFail(span!()))?;
-        let mut fresh = SymbolGen::default();
+        let mut fresh = SymbolGen::new(String::new());
         Ok(termdag.to_string_with_let_and_hint(&mut fresh, term, "expr"))
     }
 }
