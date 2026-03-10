@@ -1963,9 +1963,9 @@ impl EGraph {
             .unwrap_or(expr_head)
             .trim();
         if !atom_head.is_empty() {
+            let func_ty = self.type_info.get_func_type(atom_head);
             eprintln!(
-                "[probe:t21] atom_head={atom_head} func_type_exists={}",
-                self.type_info.get_func_type(atom_head).is_some()
+                "[probe:t21] atom_head={atom_head} func_type={func_ty:?}"
             );
         }
 
