@@ -533,16 +533,38 @@ pub fn rust_rule(
             name: prim_name.clone(),
             inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
             union_action: egglog_bridge::UnionAction::new(&egraph.backend),
-            table_actions: egraph
-                .functions
-                .iter()
-                .map(|(k, v)| {
-                    (
-                        k.clone(),
-                        egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
-                    )
-                })
-                .collect(),
+            // In proofs / term-encoding mode, user-facing constructor/function names are often
+            // represented by *view tables* whose internal names differ from the surface name.
+            //
+            // `EGraph::print_size(Some("Const"))` already resolves these via `decl.term_constructor`.
+            // Rust callbacks should be able to do the same so that `ctx.lookup("Const", ...)`
+            // hits the view table (not an internal/hidden encoding table).
+            table_actions: {
+                let mut table_actions: HashMap<String, egglog_bridge::TableAction> = egraph
+                    .functions
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            k.clone(),
+                            egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
+                        )
+                    })
+                    .collect();
+
+                for (_name, func) in egraph.functions.iter() {
+                    let Some(term_name) = func.decl.term_constructor.as_ref() else {
+                        continue;
+                    };
+                    if func.decl.internal_hidden || func.decl.internal_let {
+                        continue;
+                    }
+                    table_actions.insert(
+                        term_name.clone(),
+                        egglog_bridge::TableAction::new(&egraph.backend, func.backend_id),
+                    );
+                }
+                table_actions
+            },
             panic_id,
             func,
         },
