@@ -2139,6 +2139,58 @@ impl EGraph {
             )));
         }
 
+        // If the user asks for a reflexive proof, prefer the term proof table (`{Sort}Proof`)
+        // which can carry a `Rule` constructor tagged with the originating rule name.
+        if lhs == rhs {
+            if let Some(term_proof_name) = self
+                .proof_state
+                .proof_names
+                .term_proof_name
+                .get(sort.name())
+                .cloned()
+            {
+                if let Some(proof_value) = self.lookup_function(&term_proof_name, &[lhs]) {
+                    let proof_sort = self
+                        .functions
+                        .get(&term_proof_name)
+                        .ok_or_else(|| {
+                            Error::BackendError(format!(
+                                "term proof function {} is not declared",
+                                term_proof_name
+                            ))
+                        })?
+                        .schema
+                        .output
+                        .clone();
+
+                    self.backend.flush_updates();
+                    let extractor = Extractor::compute_costs_from_rootsorts_allow_unextractable(
+                        Some(vec![proof_sort.clone()]),
+                        self,
+                        TreeAdditiveCostModel::default(),
+                    );
+                    let mut termdag = TermDag::default();
+                    let (_, proof_term_id) = extractor
+                        .extract_best_with_sort(self, &mut termdag, proof_value, proof_sort)
+                        .ok_or_else(|| {
+                            Error::BackendError(format!(
+                                "failed to extract term proof from {} for value {:?}",
+                                term_proof_name, lhs
+                            ))
+                        })?;
+
+                    let (mut proof_store, proof_id) = proofs::proof_format::proof_store_from_term(
+                        &self.proof_state.proof_names,
+                        termdag,
+                        proof_term_id,
+                        &self.proof_check_program,
+                    );
+                    let _ = proof_store.remove_globals(&self.proof_check_program);
+                    return Ok(proof_store.proof_to_string(proof_id));
+                }
+            }
+        }
+
         let uf_proof_name = self
             .proof_state
             .proof_names
