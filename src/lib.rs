@@ -1877,7 +1877,7 @@ impl EGraph {
             .get_sort_by_name(sort_name)
             .ok_or_else(|| Error::TypeError(TypeError::Unbound(sort_name.into(), span!())))?
             .clone();
-        let extractor = Extractor::compute_costs_from_rootsorts_allow_unextractable(
+        let extractor = Extractor::compute_costs_from_rootsorts(
             Some(vec![sort.clone()]),
             self,
             TreeAdditiveCostModel::default(),
