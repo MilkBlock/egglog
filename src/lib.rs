@@ -1524,6 +1524,167 @@ impl EGraph {
         self.proof_state.proofs_enabled
     }
 
+    fn proof_uf_name(&self, sort_name: &str) -> Result<&str, Error> {
+        self.proof_state
+            .uf_parent
+            .get(sort_name)
+            .map(|s| s.as_str())
+            .ok_or_else(|| {
+                Error::BackendError(format!(
+                    "no proof UF function recorded for sort {sort_name} (not in proofs mode, or sort not declared yet)"
+                ))
+            })
+    }
+
+    fn proof_uf_proof_name(&self, sort_name: &str) -> Result<&str, Error> {
+        self.proof_state
+            .proof_names
+            .uf_proof_name
+            .get(sort_name)
+            .map(|s| s.as_str())
+            .ok_or_else(|| {
+                Error::BackendError(format!(
+                    "no UF proof function recorded for sort {sort_name} (proof encoding not initialized?)"
+                ))
+            })
+    }
+
+    fn proof_term_proof_name(&self, sort_name: &str) -> Result<&str, Error> {
+        self.proof_state
+            .proof_names
+            .term_proof_name
+            .get(sort_name)
+            .map(|s| s.as_str())
+            .ok_or_else(|| {
+                Error::BackendError(format!(
+                    "no term proof function recorded for sort {sort_name} (proof encoding not initialized?)"
+                ))
+            })
+    }
+
+    fn proof_to_ast_constructor(&self, sort_name: &str) -> Result<&str, Error> {
+        self.proof_state
+            .proof_names
+            .sort_to_ast_constructor
+            .get(sort_name)
+            .map(|s| s.as_str())
+            .ok_or_else(|| {
+                Error::BackendError(format!(
+                    "no sort->Ast constructor recorded for sort {sort_name} (proof encoding not initialized?)"
+                ))
+            })
+    }
+
+    fn proof_backend_id(&self, func_name: &str) -> Result<egglog_bridge::FunctionId, Error> {
+        self.functions
+            .get(func_name)
+            .map(|f| f.backend_id)
+            .ok_or_else(|| Error::BackendError(format!("function {func_name} not declared")))
+    }
+
+    fn proof_mk_fiat_value(
+        &mut self,
+        sort_name: &str,
+        lhs: Value,
+        rhs: Value,
+    ) -> Result<Value, Error> {
+        if !self.are_proofs_enabled() {
+            return Err(Error::BackendError(
+                "proof_mk_fiat_value requires EGraph::new_with_proofs".into(),
+            ));
+        }
+
+        let to_ast_name = self.proof_to_ast_constructor(sort_name)?.to_string();
+        let fiat_name = self.proof_state.proof_names.fiat_constructor.clone();
+        let to_ast_id = self.proof_backend_id(&to_ast_name)?;
+        let fiat_id = self.proof_backend_id(&fiat_name)?;
+
+        let proof_val = self.backend.with_execution_state(|state| {
+            let to_ast = egglog_bridge::TableAction::new(&self.backend, to_ast_id);
+            let fiat = egglog_bridge::TableAction::new(&self.backend, fiat_id);
+
+            let ast_lhs = to_ast.lookup(state, &[lhs])?;
+            let ast_rhs = to_ast.lookup(state, &[rhs])?;
+            let proof = fiat.lookup(state, &[ast_lhs, ast_rhs])?;
+            Some(proof)
+        });
+        proof_val.ok_or_else(|| {
+            Error::BackendError("failed to construct Fiat proof term value".into())
+        })
+    }
+
+    /// In proofs mode, add a proof-carrying self-edge for a value `v` of `sort_name`.
+    ///
+    /// This writes to:
+    /// - `{sort}UF` (edge `v -> v`)
+    /// - `{sort}UFProof` (Fiat proof of `v = v`)
+    /// - `{sort}Proof` (term proof of `v = v`)
+    pub fn proof_init_self_edge_fiat(
+        &mut self,
+        sort_name: &str,
+        v: Value,
+    ) -> Result<(), Error> {
+        if !self.are_proofs_enabled() {
+            return Err(Error::BackendError(
+                "proof_init_self_edge_fiat requires EGraph::new_with_proofs".into(),
+            ));
+        }
+
+        let uf_name = self.proof_uf_name(sort_name)?.to_string();
+        let uf_proof_name = self.proof_uf_proof_name(sort_name)?.to_string();
+        let term_proof_name = self.proof_term_proof_name(sort_name)?.to_string();
+        let uf_id = self.proof_backend_id(&uf_name)?;
+        let uf_proof_id = self.proof_backend_id(&uf_proof_name)?;
+        let term_proof_id = self.proof_backend_id(&term_proof_name)?;
+
+        let fiat = self.proof_mk_fiat_value(sort_name, v, v)?;
+
+        self.backend.with_execution_state(|state| {
+            let uf = egglog_bridge::TableAction::new(&self.backend, uf_id);
+            let mut uf_proof = egglog_bridge::TableAction::new(&self.backend, uf_proof_id);
+            let mut term_proof = egglog_bridge::TableAction::new(&self.backend, term_proof_id);
+
+            let _ = uf.lookup(state, &[v, v]);
+            uf_proof.insert(state, [v, v, fiat].into_iter());
+            term_proof.insert(state, [v, fiat].into_iter());
+            Some(self.backend.base_values().get(()))
+        });
+        self.backend.flush_updates();
+        Ok(())
+    }
+
+    /// In proofs mode, record a Fiat equality proof for `a = b` on `sort_name`.
+    ///
+    /// This writes to `{sort}UF` and `{sort}UFProof` using the canonical orientation
+    /// `(larger -> smaller)`, matching proof encoding.
+    pub fn proof_union_fiat(&mut self, sort_name: &str, a: Value, b: Value) -> Result<(), Error> {
+        if !self.are_proofs_enabled() {
+            return Err(Error::BackendError(
+                "proof_union_fiat requires EGraph::new_with_proofs".into(),
+            ));
+        }
+
+        let (smaller, larger) = if a <= b { (a, b) } else { (b, a) };
+
+        let uf_name = self.proof_uf_name(sort_name)?.to_string();
+        let uf_proof_name = self.proof_uf_proof_name(sort_name)?.to_string();
+        let uf_id = self.proof_backend_id(&uf_name)?;
+        let uf_proof_id = self.proof_backend_id(&uf_proof_name)?;
+
+        let fiat = self.proof_mk_fiat_value(sort_name, larger, smaller)?;
+
+        self.backend.with_execution_state(|state| {
+            let uf = egglog_bridge::TableAction::new(&self.backend, uf_id);
+            let mut uf_proof = egglog_bridge::TableAction::new(&self.backend, uf_proof_id);
+
+            let _ = uf.lookup(state, &[larger, smaller]);
+            uf_proof.insert(state, [larger, smaller, fiat].into_iter());
+            Some(self.backend.base_values().get(()))
+        });
+        self.backend.flush_updates();
+        Ok(())
+    }
+
     fn resolve_command_before_proofs(
         &mut self,
         command: Command,
