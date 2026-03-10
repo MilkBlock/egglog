@@ -2182,13 +2182,11 @@ impl EGraph {
                     if a == b {
                         return lookup_uf_proof(state, a, b);
                     }
-                    let (smaller, larger) = if a <= b { (a, b) } else { (b, a) };
-                    let proof = lookup_uf_proof(state, larger, smaller)?;
-                    if larger == a {
-                        Some(proof)
-                    } else {
-                        mk_sym(state, proof)
+                    if let Some(proof) = lookup_uf_proof(state, a, b) {
+                        return Some(proof);
                     }
+                    let proof = lookup_uf_proof(state, b, a)?;
+                    mk_sym(state, proof)
                 };
 
             let proof = self.backend.with_execution_state(|state| {
