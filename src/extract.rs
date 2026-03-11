@@ -204,6 +204,27 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         )
     }
 
+    /// Like `compute_costs_from_rootsorts_allow_unextractable`, but keeps view tables enabled.
+    ///
+    /// This is useful when proof terms (e.g. Sym/Trans constructors) are only reachable via
+    /// view-table edges in term-encoding mode.
+    pub(crate) fn compute_costs_from_rootsorts_allow_unextractable_keep_view_tables(
+        rootsorts: Option<Vec<ArcSort>>,
+        egraph: &EGraph,
+        cost_model: impl CostModel<C> + 'static,
+    ) -> Self {
+        Self::compute_costs_from_rootsorts_internal(
+            egraph,
+            ExtractionOptions {
+                cost_model: Box::new(cost_model),
+                rootsorts,
+                respect_unextractable: false,
+                skip_view_tables: false,
+                respect_hidden: false,
+            },
+        )
+    }
+
     fn compute_costs_from_rootsorts_internal(
         egraph: &EGraph,
         options: ExtractionOptions<C>,
@@ -622,6 +643,16 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
     /// If no UF is registered for this sort, returns the original value.
     /// The UF table stores (value, canonical) pairs - one hop lookup.
     fn find_canonical(&self, egraph: &EGraph, value: Value, sort: &ArcSort) -> Value {
+        // Proof/AST datatypes are encoded as eq sorts but are not part of the term-encoding UF
+        // discipline used for user sorts. Canonicalizing them through UF can produce values that
+        // have no constructor row (and therefore become unextractable).
+        if sort.name() == egraph.proof_state.proof_names.proof_datatype
+            || sort.name() == egraph.proof_state.proof_names.ast_sort
+            || sort.name() == egraph.proof_state.proof_names.proof_list_sort
+        {
+            return value;
+        }
+
         // Check if there's a UF registered for this sort
         let Some(uf_name) = egraph.proof_state.uf_parent.get(sort.name()) else {
             return value;
