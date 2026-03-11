@@ -1030,15 +1030,22 @@ impl EGraph {
         }
         let resolved_commands = resolved.desugared;
 
-        assert_eq!(resolved_commands.len(), 1);
-        let resolved_command = resolved_commands.into_iter().next().unwrap();
-        let resolved_expr = match resolved_command {
-            ResolvedNCommand::CoreAction(ResolvedAction::Expr(_, resolved_expr)) => resolved_expr,
-            _ => unreachable!(),
-        };
-        let sort = resolved_expr.output_type();
-        let value = self.eval_resolved_expr(span, &resolved_expr)?;
-        Ok((sort, value))
+        let mut last_result: Option<(ArcSort, Value)> = None;
+        for cmd in resolved_commands {
+            match cmd {
+                ResolvedNCommand::CoreAction(ResolvedAction::Expr(_, resolved_expr)) => {
+                    let sort = resolved_expr.output_type();
+                    let value = self.eval_resolved_expr(span.clone(), &resolved_expr)?;
+                    last_result = Some((sort, value));
+                }
+                other => {
+                    let _ = self.run_command(other)?;
+                }
+            }
+        }
+        last_result.ok_or_else(|| {
+            Error::BackendError("eval_expr did not desugar to an Expr action".into())
+        })
     }
 
     fn eval_resolved_expr(&mut self, span: Span, expr: &ResolvedExpr) -> Result<Value, Error> {
@@ -1549,6 +1556,34 @@ impl EGraph {
             })
     }
 
+    /// Returns the `{sort}UF` function name for `sort_name` in proofs mode.
+    pub fn proof_uf_table_name(&self, sort_name: &str) -> Result<&str, Error> {
+        self.proof_uf_name(sort_name)
+    }
+
+    /// Returns the `{sort}UFProof` function name for `sort_name` in proofs mode.
+    pub fn proof_uf_proof_table_name(&self, sort_name: &str) -> Result<&str, Error> {
+        self.proof_uf_proof_name(sort_name)
+    }
+
+    /// Returns the freshened `{f}ViewProof` function name for the given function symbol `f`.
+    ///
+    /// In proofs + term-encoding mode, the view-proof function name is generated via
+    /// `symbol_gen.fresh("{f}ViewProof")` and cached in the proof encoding state.
+    /// External tooling should not guess the freshened name.
+    pub fn proof_view_proof_name(&self, func_name: &str) -> Result<&str, Error> {
+        self.proof_state
+            .proof_names
+            .view_proof_name
+            .get(func_name)
+            .map(|s| s.as_str())
+            .ok_or_else(|| {
+                Error::BackendError(format!(
+                    "no view proof function recorded for function {func_name} (not in proofs+term-encoding mode, or proof encoding not initialized?)"
+                ))
+            })
+    }
+
     fn proof_term_proof_name(&self, sort_name: &str) -> Result<&str, Error> {
         self.proof_state
             .proof_names
@@ -1654,6 +1689,73 @@ impl EGraph {
         })
     }
 
+    fn proof_mk_proof_list_value(&mut self, premise_proofs: &[Value]) -> Result<Value, Error> {
+        if !self.are_proofs_enabled() {
+            return Err(Error::BackendError(
+                "proof_mk_proof_list_value requires EGraph::new_with_proofs".into(),
+            ));
+        }
+
+        let pnil_name = self.proof_state.proof_names.pnil.clone();
+        let pcons_name = self.proof_state.proof_names.pcons.clone();
+        let pnil_id = self.proof_backend_id(&pnil_name)?;
+        let pcons_id = self.proof_backend_id(&pcons_name)?;
+
+        let list_val = self.backend.with_execution_state(|state| {
+            let pnil = egglog_bridge::TableAction::new(&self.backend, pnil_id);
+            let pcons = egglog_bridge::TableAction::new(&self.backend, pcons_id);
+
+            let mut list = pnil.lookup(state, &[])?;
+            for &proof in premise_proofs.iter().rev() {
+                list = pcons.lookup(state, &[proof, list])?;
+            }
+            Some(list)
+        });
+        list_val.ok_or_else(|| {
+            Error::BackendError("failed to construct ProofList term value".into())
+        })
+    }
+
+    fn proof_mk_rule_value_with_premises(
+        &mut self,
+        sort_name: &str,
+        lhs: Value,
+        rhs: Value,
+        rule_name: &str,
+        premise_proofs: &[Value],
+    ) -> Result<Value, Error> {
+        if !self.are_proofs_enabled() {
+            return Err(Error::BackendError(
+                "proof_mk_rule_value_with_premises requires EGraph::new_with_proofs".into(),
+            ));
+        }
+
+        let to_ast_name = self.proof_to_ast_constructor(sort_name)?.to_string();
+        let rule_ctor_name = self.proof_state.proof_names.rule_constructor.clone();
+        let to_ast_id = self.proof_backend_id(&to_ast_name)?;
+        let rule_ctor_id = self.proof_backend_id(&rule_ctor_name)?;
+
+        let rule_name_val = self
+            .backend
+            .base_values()
+            .get::<S>(rule_name.to_string().into());
+
+        let proof_list = self.proof_mk_proof_list_value(premise_proofs)?;
+
+        let proof_val = self.backend.with_execution_state(|state| {
+            let to_ast = egglog_bridge::TableAction::new(&self.backend, to_ast_id);
+            let rule_ctor = egglog_bridge::TableAction::new(&self.backend, rule_ctor_id);
+
+            let ast_lhs = to_ast.lookup(state, &[lhs])?;
+            let ast_rhs = to_ast.lookup(state, &[rhs])?;
+            let proof = rule_ctor.lookup(state, &[rule_name_val, proof_list, ast_lhs, ast_rhs])?;
+            Some(proof)
+        });
+        proof_val.ok_or_else(|| {
+            Error::BackendError("failed to construct Rule proof term value".into())
+        })
+    }
+
     /// In proofs mode, add a proof-carrying self-edge for a value `v` of `sort_name`.
     ///
     /// This writes to:
@@ -1720,6 +1822,51 @@ impl EGraph {
 
         let proof =
             self.proof_mk_rule_value_empty_premises(sort_name, larger, smaller, rule_name)?;
+
+        self.backend.with_execution_state(|state| {
+            let uf = egglog_bridge::TableAction::new(&self.backend, uf_id);
+            let mut uf_proof = egglog_bridge::TableAction::new(&self.backend, uf_proof_id);
+
+            let _ = uf.lookup(state, &[larger, smaller]);
+            uf_proof.insert(state, [larger, smaller, proof].into_iter());
+            Some(self.backend.base_values().get(()))
+        });
+        self.backend.flush_updates();
+        Ok(())
+    }
+
+    /// In proofs mode, record a Rule equality proof for `a = b` on `sort_name` with explicit premise proofs.
+    ///
+    /// This writes to `{sort}UF` and `{sort}UFProof` using the canonical orientation
+    /// `(larger -> smaller)`, matching proof encoding.
+    pub fn proof_union_rule_with_premises(
+        &mut self,
+        sort_name: &str,
+        a: Value,
+        b: Value,
+        rule_name: &str,
+        premise_proofs: &[Value],
+    ) -> Result<(), Error> {
+        if !self.are_proofs_enabled() {
+            return Err(Error::BackendError(
+                "proof_union_rule_with_premises requires EGraph::new_with_proofs".into(),
+            ));
+        }
+
+        let (smaller, larger) = if a <= b { (a, b) } else { (b, a) };
+
+        let uf_name = self.proof_uf_name(sort_name)?.to_string();
+        let uf_proof_name = self.proof_uf_proof_name(sort_name)?.to_string();
+        let uf_id = self.proof_backend_id(&uf_name)?;
+        let uf_proof_id = self.proof_backend_id(&uf_proof_name)?;
+
+        let proof = self.proof_mk_rule_value_with_premises(
+            sort_name,
+            larger,
+            smaller,
+            rule_name,
+            premise_proofs,
+        )?;
 
         self.backend.with_execution_state(|state| {
             let uf = egglog_bridge::TableAction::new(&self.backend, uf_id);
@@ -2079,6 +2226,24 @@ impl EGraph {
         self.backend.dump_debug_info();
     }
 
+    /// Debug helper: collect up to `limit` raw rows from a function table.
+    ///
+    /// Intended for diagnosing proof/term-encoding issues; not stable API.
+    pub fn debug_dump_function_rows(&self, func_name: &str, limit: usize) -> Vec<Vec<Value>> {
+        let Some(func) = self.functions.get(func_name) else {
+            return Vec::new();
+        };
+        let mut out: Vec<Vec<Value>> = Vec::new();
+        self.backend.for_each_while(func.backend_id, |row| {
+            if out.len() >= limit {
+                return false;
+            }
+            out.push(row.vals.to_vec());
+            true
+        });
+        out
+    }
+
     /// Get the canonical representation for `val` based on type.
     pub fn get_canonical_value(&self, val: Value, sort: &ArcSort) -> Value {
         self.backend
@@ -2139,6 +2304,76 @@ impl EGraph {
             )));
         }
 
+        // If the user asks for a reflexive proof, prefer the term proof table (`{Sort}Proof`)
+        // which can carry a `Rule` constructor tagged with the originating rule name.
+        if lhs == rhs {
+            if let Some(term_proof_name) = self
+                .proof_state
+                .proof_names
+                .term_proof_name
+                .get(sort.name())
+                .cloned()
+            {
+                if let Some(proof_value) = self.lookup_function(&term_proof_name, &[lhs]) {
+                    let proof_sort = self
+                        .functions
+                        .get(&term_proof_name)
+                        .ok_or_else(|| {
+                            Error::BackendError(format!(
+                                "term proof function {} is not declared",
+                                term_proof_name
+                            ))
+                        })?
+                        .schema
+                        .output
+                        .clone();
+
+                    self.backend.flush_updates();
+                    let extractor = Extractor::compute_costs_from_rootsorts_allow_unextractable(
+                        Some(vec![proof_sort.clone()]),
+                        self,
+                        TreeAdditiveCostModel::default(),
+                    );
+                    let mut termdag = TermDag::default();
+                    let (_, proof_term_id) = extractor
+                        .extract_best_with_sort(self, &mut termdag, proof_value, proof_sort)
+                        .ok_or_else(|| {
+                            Error::BackendError(format!(
+                                "failed to extract term proof from {} for value {:?}",
+                                term_proof_name, lhs
+                            ))
+                        })?;
+
+                    let (mut proof_store, proof_id) = proofs::proof_format::proof_store_from_term(
+                        &self.proof_state.proof_names,
+                        termdag,
+                        proof_term_id,
+                        &self.proof_check_program,
+                    );
+                    let _ = proof_store.remove_globals(&self.proof_check_program);
+                    return Ok(proof_store.proof_to_string(proof_id));
+                }
+            }
+
+            // Fallback: if there is no stored proof value for `lhs = lhs`, return a trivial Fiat proof.
+            // (egglog proofs are not reflexive by default, and UFProof may not contain self-edges.)
+            let extractor = Extractor::compute_costs_from_rootsorts_allow_unextractable(
+                None,
+                self,
+                TreeAdditiveCostModel::default(),
+            );
+            let mut termdag = TermDag::default();
+            let (_, term_id) = extractor
+                .extract_best_with_sort(self, &mut termdag, lhs, sort.clone())
+                .ok_or_else(|| {
+                    Error::BackendError(format!(
+                        "failed to extract a term for reflexive proof value {lhs:?} (sort={})",
+                        sort.name()
+                    ))
+                })?;
+            let term_str = termdag.to_string(term_id);
+            return Ok(format!("(Fiat (= {term_str} {term_str}))"));
+        }
         let uf_proof_name = self
             .proof_state
             .proof_names
@@ -2156,11 +2391,31 @@ impl EGraph {
         // from each value to the canonical representative.
         let proof_value = {
             let rep = lhs_canon;
+            // UF proof tables are indexed by canonical representatives of eq sorts.
+            // Canonicalize the endpoints before lookup to avoid missing proofs for
+            // non-representative values in the same e-class.
+            let lhs_key = lhs_canon;
+            let rhs_key = rhs_canon;
 
             let eq_sym_name = self.proof_state.proof_names.eq_sym_constructor.clone();
             let eq_trans_name = self.proof_state.proof_names.eq_trans_constructor.clone();
+            let fiat_name = self.proof_state.proof_names.fiat_constructor.clone();
+            let to_ast_name = self
+                .proof_state
+                .proof_names
+                .sort_to_ast_constructor
+                .get(sort.name())
+                .ok_or_else(|| {
+                    Error::BackendError(format!(
+                        "no AST wrapper constructor registered for sort {}",
+                        sort.name()
+                    ))
+                })?
+                .clone();
             let eq_sym_id = self.proof_backend_id(&eq_sym_name)?;
             let eq_trans_id = self.proof_backend_id(&eq_trans_name)?;
+            let fiat_id = self.proof_backend_id(&fiat_name)?;
+            let to_ast_id = self.proof_backend_id(&to_ast_name)?;
             let uf_proof_id = self.proof_backend_id(&uf_proof_name)?;
 
             let mk_sym = |state: &mut ExecutionState, proof: Value| -> Option<Value> {
@@ -2177,10 +2432,16 @@ impl EGraph {
                     let uf_proof = egglog_bridge::TableAction::new(&self.backend, uf_proof_id);
                     uf_proof.lookup(state, &[a, b])
                 };
+            let mk_reflexive_fiat = |state: &mut ExecutionState, v: Value| -> Option<Value> {
+                let to_ast = egglog_bridge::TableAction::new(&self.backend, to_ast_id);
+                let ast_v = to_ast.lookup(state, &[v])?;
+                let fiat = egglog_bridge::TableAction::new(&self.backend, fiat_id);
+                fiat.lookup(state, &[ast_v, ast_v])
+            };
             let prove_eq =
                 |state: &mut ExecutionState, a: Value, b: Value| -> Option<Value> {
                     if a == b {
-                        return lookup_uf_proof(state, a, b);
+                        return lookup_uf_proof(state, a, b).or_else(|| mk_reflexive_fiat(state, a));
                     }
                     if let Some(proof) = lookup_uf_proof(state, a, b) {
                         return Some(proof);
@@ -2190,8 +2451,8 @@ impl EGraph {
                 };
 
             let proof = self.backend.with_execution_state(|state| {
-                let lhs_to_rep = prove_eq(state, lhs, rep)?;
-                let rhs_to_rep = prove_eq(state, rhs, rep)?;
+                let lhs_to_rep = prove_eq(state, lhs_key, rep)?;
+                let rhs_to_rep = prove_eq(state, rhs_key, rep)?;
                 let rep_to_rhs = mk_sym(state, rhs_to_rep)?;
                 mk_trans(state, lhs_to_rep, rep_to_rhs)
             });
@@ -2218,18 +2479,54 @@ impl EGraph {
         // Make them visible to extraction before we attempt to reconstruct the termdag.
         self.backend.flush_updates();
 
-        let extractor = Extractor::compute_costs_from_rootsorts_allow_unextractable(
+        let extractor = Extractor::compute_costs_from_rootsorts_allow_unextractable_keep_view_tables(
             Some(vec![proof_sort.clone()]),
             self,
             TreeAdditiveCostModel::default(),
         );
         let mut termdag = TermDag::default();
+        let proof_sort_name = proof_sort.name().to_string();
         let (_, proof_term_id) = extractor
-            .extract_best_with_sort(self, &mut termdag, proof_value, proof_sort)
+            .extract_best_with_sort(self, &mut termdag, proof_value, proof_sort.clone())
             .ok_or_else(|| {
+                let mut has_constructor_row = false;
+                let mut checked = 0usize;
+                let mut sample = Vec::<String>::new();
+                for (fname, f) in self.functions.iter() {
+                    if checked >= 20 {
+                        break;
+                    }
+                    if f.decl.subtype != crate::ast::FunctionSubtype::Constructor {
+                        continue;
+                    }
+                    if f.extraction_output_sort().name() != proof_sort_name {
+                        continue;
+                    }
+                    checked += 1;
+                    let out_idx = f.extraction_output_index();
+                    let mut found = false;
+                    self.backend.for_each(f.backend_id, |row: egglog_bridge::FunctionRow| {
+                        if !row.subsumed && row.vals.get(out_idx).copied() == Some(proof_value) {
+                            found = true;
+                        }
+                    });
+                    if found {
+                        has_constructor_row = true;
+                        sample.push(fname.clone());
+                        if sample.len() >= 3 {
+                            break;
+                        }
+                    }
+                }
                 Error::BackendError(format!(
-                    "failed to extract proof term from {} for values {:?} and {:?}",
-                    uf_proof_name, lhs, rhs
+                    "failed to extract proof term from {} for values {:?} and {:?} (proof_value={:?}, sort={}, has_ctor_row={}, sample_ctrs={:?})",
+                    uf_proof_name,
+                    lhs,
+                    rhs,
+                    proof_value,
+                    proof_sort_name,
+                    has_constructor_row,
+                    sample
                 ))
             })?;
 
