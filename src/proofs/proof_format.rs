@@ -472,17 +472,36 @@ impl ProofStore {
         };
 
         if rule.body.len() != premise_proofs.len() {
-            panic!(
-                "rule {} has {} premises, but got {} premise proofs",
-                rule_name,
-                rule.body.len(),
-                premise_proofs.len()
-            );
+            // Some proof producers (notably callback-injected proofs for `rust_rule`) may omit
+            // premise proofs or otherwise fail to serialize them. Don't panic while pretty
+            // printing; fall back to an empty substitution so the proof can still be rendered.
+            return substitution;
         }
 
+        // Premise proofs are stored as a list in the proof term, but for some producers (notably
+        // rust_rule callback injection) the order is not guaranteed to match the rule body's fact
+        // order.  Compute a substitution by matching proofs to facts by unification rather than
+        // relying on positional correspondence.
+        let mut remaining: Vec<ProofId> = premise_proofs.to_vec();
         let mut current_subst = substitution;
-        for (fact, proof_id) in rule.body.iter().zip(premise_proofs.iter()) {
-            self.unify_fact(fact, *proof_id, &mut current_subst);
+        for fact in rule.body.iter() {
+            let mut matched: Option<(usize, HashMap<String, TermId>)> = None;
+            for (idx, proof_id) in remaining.iter().copied().enumerate() {
+                let mut trial = current_subst.clone();
+                if self.try_unify_fact(fact, proof_id, &mut trial) {
+                    matched = Some((idx, trial));
+                    break;
+                }
+            }
+            let Some((idx, trial_subst)) = matched else {
+                // Some proof producers (notably callback-injected proofs for rust_rule) may not
+                // provide premise proofs in a form that can be matched back to the (possibly
+                // instrumented) rule body facts. In that case, fall back to the partial
+                // substitution accumulated so far so we can still pretty-print the proof term.
+                return current_subst;
+            };
+            remaining.swap_remove(idx);
+            current_subst = trial_subst;
         }
 
         current_subst
@@ -538,6 +557,101 @@ impl ProofStore {
             }
             ResolvedFact::Fact(expr) => {
                 self.unify_expr(expr, proof.rhs(), subst);
+            }
+        }
+    }
+
+    fn try_unify_fact(
+        &self,
+        fact: &ResolvedFact,
+        proof_id: ProofId,
+        subst: &mut HashMap<String, TermId>,
+    ) -> bool {
+        let proof = &self.id_to_proof[proof_id];
+        match fact {
+            ResolvedFact::Eq(
+                _span,
+                ResolvedExpr::Call(
+                    _span2,
+                    head @ ResolvedCall::Func(FuncType {
+                        subtype: FunctionSubtype::Custom,
+                        ..
+                    }),
+                    args,
+                ),
+                ResolvedExpr::Var(_span3, v),
+            ) => {
+                let term = proof.rhs();
+                let children = match self.term_dag.get(term) {
+                    Term::App(head_name, children) if head_name == head.name() => children.clone(),
+                    _ => return false,
+                };
+                if children.len() != args.len() + 1 {
+                    return false;
+                }
+
+                let var_child_term = *children.last().unwrap();
+                if !self.try_add_to_subst(subst, &v.name, var_child_term) {
+                    return false;
+                }
+                for (arg_expr, child_term) in args.iter().zip(children.iter()) {
+                    if !self.try_unify_expr(arg_expr, *child_term, subst) {
+                        return false;
+                    }
+                }
+                true
+            }
+            ResolvedFact::Eq(_, lhs_expr, rhs_expr) => {
+                self.try_unify_expr(lhs_expr, proof.lhs(), subst)
+                    && self.try_unify_expr(rhs_expr, proof.rhs(), subst)
+            }
+            ResolvedFact::Fact(expr) => self.try_unify_expr(expr, proof.rhs(), subst),
+        }
+    }
+
+    fn try_add_to_subst(
+        &self,
+        subst: &mut HashMap<String, TermId>,
+        var: &str,
+        term_id: TermId,
+    ) -> bool {
+        match subst.entry(var.to_string()) {
+            HEntry::Vacant(entry) => {
+                entry.insert(term_id);
+                true
+            }
+            HEntry::Occupied(entry) => *entry.get() == term_id,
+        }
+    }
+
+    fn try_unify_expr(
+        &self,
+        expr: &ResolvedExpr,
+        term_id: TermId,
+        substitution: &mut HashMap<String, TermId>,
+    ) -> bool {
+        match expr {
+            ResolvedExpr::Lit(_, _lit) => true,
+            ResolvedExpr::Var(_, var) => self.try_add_to_subst(substitution, &var.name, term_id),
+            ResolvedExpr::Call(_, call, args) => {
+                if let ResolvedCall::Primitive(_) = call {
+                    return true;
+                }
+                let Term::App(head, children) = self.term_dag.get(term_id) else {
+                    return false;
+                };
+                if head != call.name() {
+                    return false;
+                }
+                if children.len() != args.len() {
+                    return false;
+                }
+                for (arg_expr, child_term) in args.iter().zip(children.iter()) {
+                    if !self.try_unify_expr(arg_expr, *child_term, substitution) {
+                        return false;
+                    }
+                }
+                true
             }
         }
     }
@@ -618,7 +732,7 @@ impl ProofStore {
         };
         assert!(
             child_index < args.len(),
-            "congruence child index {child_index} out of bounds for term with {} children",
+            "congruence child index {child_index} out of bounds for term {head} with {} children",
             args.len()
         );
 

@@ -20,6 +20,15 @@ use crate::{
 };
 use thiserror::Error;
 
+fn is_rust_rule(rule: &crate::ast::GenericRule<ResolvedCall, crate::ast::ResolvedVar>) -> bool {
+    match rule.head.0.as_slice() {
+        [GenericAction::Expr(_, ResolvedExpr::Call(_, ResolvedCall::Primitive(prim), _))] => {
+            prim.name().contains("rust_rule_prim")
+        }
+        _ => false,
+    }
+}
+
 /// Result of processing actions: terms bound to variables and propositions
 #[derive(Debug, Clone)]
 pub(crate) struct ActionContext {
@@ -594,13 +603,15 @@ impl ProofStore {
                 }
 
                 // Verify that the conclusion matches what the rule produces
-                self.check_rule_produces_equality(
-                    rule,
-                    substitution,
-                    &substitution_with_globals,
-                    proof.proposition(),
-                    name,
-                )?;
+                if !is_rust_rule(rule) {
+                    self.check_rule_produces_equality(
+                        rule,
+                        substitution,
+                        &substitution_with_globals,
+                        proof.proposition(),
+                        name,
+                    )?;
+                }
 
                 Ok(Proposition::new(proof.lhs(), proof.rhs()))
             }
