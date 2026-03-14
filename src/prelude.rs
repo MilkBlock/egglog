@@ -319,10 +319,15 @@ pub fn rule(
 
 /// A wrapper around an `ExecutionState` for rules that are written in Rust.
 /// See the [`rust_rule`] documentation for an example of how to use this.
-pub struct RustRuleContext<'a, 'b> {
+pub struct RustRuleContext<'a, 'b, 'c> {
     exec_state: &'a mut ExecutionState<'b>,
     union_action: egglog_bridge::UnionAction,
-    table_actions: HashMap<String, egglog_bridge::TableAction>,
+    /// Name -> backend FunctionId (captured at rust-rule registration time).
+    func_ids: &'c HashMap<String, egglog_bridge::FunctionId>,
+    /// Table actions indexed by backend FunctionId (captured at rust-rule registration time).
+    table_actions_by_id: &'c [Option<egglog_bridge::TableAction>],
+    /// Per-match table actions, lazily populated from `table_actions_by_id` (for scratch reuse).
+    table_actions_cache_by_id: Vec<(egglog_bridge::FunctionId, egglog_bridge::TableAction)>,
     /// When term encoding is enabled, functions/constructors are backed by a hidden "term table"
     /// and a separate "view table" (see proofs/term-encoding).
     ///
@@ -331,43 +336,49 @@ pub struct RustRuleContext<'a, 'b> {
     ///
     /// Rust-side `lookup(f, ...)` must populate both tables; otherwise rules (which are
     /// instrumented to match on view tables) will observe zero matches.
-    view_actions: HashMap<String, egglog_bridge::TableAction>,
+    /// View table actions indexed by the term-constructor FunctionId.
+    view_actions_by_id: &'c [Option<egglog_bridge::TableAction>],
     /// View proof functions: for each surface term constructor name `f`, this stores the
     /// `{f}ViewProof` table action (when proofs are enabled).
-    view_proof_actions: HashMap<String, egglog_bridge::TableAction>,
+    /// View proof actions indexed by the term-constructor FunctionId.
+    view_proof_actions_by_id: &'c [Option<egglog_bridge::TableAction>],
+    /// Per-match view proof actions (for scratch reuse).
+    view_proof_actions_cache_by_id: Vec<(egglog_bridge::FunctionId, egglog_bridge::TableAction)>,
     /// Term proof functions: for each eq sort name `S`, this stores the `{S}Proof` table action.
-    term_proof_actions: HashMap<String, egglog_bridge::TableAction>,
+    term_proof_actions: &'c HashMap<String, egglog_bridge::TableAction>,
+    term_proof_actions_cache: HashMap<String, egglog_bridge::TableAction>,
     /// UF functions: for each eq sort name `S`, this stores the `{S}UF` table action.
-    uf_actions: HashMap<String, egglog_bridge::TableAction>,
+    uf_actions: &'c HashMap<String, egglog_bridge::TableAction>,
     /// UF proof functions: for each eq sort name `S`, this stores the `{S}UFProof` table action.
-    uf_proof_actions: HashMap<String, egglog_bridge::TableAction>,
+    uf_proof_actions: &'c HashMap<String, egglog_bridge::TableAction>,
+    uf_proof_actions_cache: HashMap<String, egglog_bridge::TableAction>,
     /// Sort-to-AST constructors: for each sort name `S`, this stores the `Ast{S}` constructor action.
-    to_ast_actions: HashMap<String, egglog_bridge::TableAction>,
+    to_ast_actions: &'c HashMap<String, egglog_bridge::TableAction>,
     /// Fiat constructor for the proof datatype (when proofs are enabled).
-    fiat_action: Option<egglog_bridge::TableAction>,
+    fiat_action: &'c Option<egglog_bridge::TableAction>,
     /// Rule constructor for the proof datatype (when proofs are enabled).
-    rule_action: Option<egglog_bridge::TableAction>,
+    rule_action: &'c Option<egglog_bridge::TableAction>,
     /// Non-empty proof list constructor `PCons` (when proofs are enabled).
-    pcons_action: Option<egglog_bridge::TableAction>,
+    pcons_action: &'c Option<egglog_bridge::TableAction>,
     /// Empty proof list constructor `PNil` (when proofs are enabled).
-    pnil_action: Option<egglog_bridge::TableAction>,
+    pnil_action: &'c Option<egglog_bridge::TableAction>,
     /// Name of the proof-list empty constructor `PNil` (when proofs are enabled).
     ///
     /// Needed because in term-encoding mode we must populate the corresponding view table;
     /// `TableAction::lookup` alone only touches the hidden term table.
-    pnil_name: Option<String>,
+    pnil_name: &'c Option<String>,
     /// Name of the proof-list cons constructor `PCons` (when proofs are enabled).
     ///
     /// Needed for the same reason as `pnil_name`.
-    pcons_name: Option<String>,
+    pcons_name: &'c Option<String>,
     /// The user-provided rule name (for tagging proof terms).
-    rule_name: String,
+    rule_name: &'c str,
     /// Output sort name for surface constructors (e.g. `Const` -> `Expr`).
-    term_output_sorts: HashMap<String, String>,
+    term_output_sorts_by_id: &'c [Option<String>],
     panic_id: ExternalFunctionId,
 }
 
-impl RustRuleContext<'_, '_> {
+impl RustRuleContext<'_, '_, '_> {
     /// Convert from an egglog value to a Rust type.
     pub fn value_to_base<T: BaseValue>(&self, x: Value) -> T {
         self.exec_state.base_values().unwrap::<T>(x)
@@ -395,14 +406,35 @@ impl RustRuleContext<'_, '_> {
             .register_val::<T>(x, self.exec_state)
     }
 
-    fn get_table_action(&self, table: &str) -> egglog_bridge::TableAction {
-        self.table_actions[table].clone()
+    fn func_id(&self, table: &str) -> egglog_bridge::FunctionId {
+        *self
+            .func_ids
+            .get(table)
+            .unwrap_or_else(|| panic!("missing function id for table: {table}"))
+    }
+
+    fn get_table_action_by_id(&self, table: egglog_bridge::FunctionId) -> &egglog_bridge::TableAction {
+        self.table_actions_by_id
+            .get(table.rep() as usize)
+            .and_then(|x| x.as_ref())
+            .unwrap_or_else(|| panic!("missing table action for id: {:?}", table))
     }
 
     /// Do a table lookup. This is potentially a mutable operation!
     /// For more information, see `egglog_bridge::TableAction::lookup`.
     pub fn lookup(&mut self, table: &str, key: &[Value]) -> Option<Value> {
-        let out = self.get_table_action(table).lookup(self.exec_state, key);
+        let table_id = self.func_id(table);
+        self.lookup_id(table_id, key)
+    }
+
+    /// Do a table lookup by cached backend FunctionId.
+    pub fn lookup_id(&mut self, table: egglog_bridge::FunctionId, key: &[Value]) -> Option<Value> {
+        let table_actions_by_id = self.table_actions_by_id;
+        let action = table_actions_by_id
+            .get(table.rep() as usize)
+            .and_then(|x| x.as_ref())
+            .unwrap_or_else(|| panic!("missing table action for id: {:?}", table));
+        let out = action.lookup(self.exec_state, key);
 
         // In term-encoding mode, view tables store canonicalized e-nodes and are used for matching.
         // `lookup` on the term table must also ensure:
@@ -410,20 +442,46 @@ impl RustRuleContext<'_, '_> {
         // - (in proofs mode) the corresponding view proof / term proof entries exist,
         //   since instrumented rules query them as part of their match.
         if let Some(out) = out {
-            if let Some(view) = self.view_actions.get(table) {
+            let view_actions_by_id = self.view_actions_by_id;
+            if let Some(view) = view_actions_by_id
+                .get(table.rep() as usize)
+                .and_then(|x| x.as_ref())
+            {
                 let mut view_key = Vec::with_capacity(key.len() + 1);
                 view_key.extend_from_slice(key);
                 view_key.push(out);
-                let _ = view.clone().lookup(self.exec_state, &view_key);
+                let _ = view.lookup(self.exec_state, &view_key);
 
-                if let Some(proof) = self.mk_fiat_term_proof(table, out) {
-                    if let Some(view_proof) = self.view_proof_actions.get(table) {
-                        let row = view_key
-                            .iter()
-                            .copied()
-                            .chain(std::iter::once(proof));
-                        let mut view_proof = view_proof.clone();
-                        view_proof.insert(self.exec_state, row);
+                if let Some(proof) = self.mk_fiat_term_proof_by_id(table, out) {
+                    let view_proof_actions_by_id = self.view_proof_actions_by_id;
+                    let has_view_proof = view_proof_actions_by_id
+                        .get(table.rep() as usize)
+                        .and_then(|x| x.as_ref())
+                        .is_some();
+                    if has_view_proof {
+                        let row = view_key.iter().copied().chain(std::iter::once(proof));
+                        let view_proof_action = if let Some((_, action)) = self
+                            .view_proof_actions_cache_by_id
+                            .iter_mut()
+                            .find(|(id, _)| *id == table)
+                        {
+                            action
+                        } else {
+                            let action = view_proof_actions_by_id
+                                .get(table.rep() as usize)
+                                .and_then(|x| x.as_ref())
+                                .unwrap_or_else(|| {
+                                    panic!("missing view proof action for table id: {:?}", table)
+                                })
+                                .clone();
+                            self.view_proof_actions_cache_by_id.push((table, action));
+                            &mut self
+                                .view_proof_actions_cache_by_id
+                                .last_mut()
+                                .expect("just pushed")
+                                .1
+                        };
+                        view_proof_action.insert(self.exec_state, row);
                     }
                 }
             }
@@ -433,11 +491,18 @@ impl RustRuleContext<'_, '_> {
         }
     }
 
-    fn mk_fiat_term_proof(&mut self, table: &str, out: Value) -> Option<Value> {
-        let sort_name = self.term_output_sorts.get(table)?.clone();
-        let mut term_proof = self.term_proof_actions.get(&sort_name).cloned()?;
-        let to_ast = self.to_ast_actions.get(&sort_name).cloned()?;
-        let fiat = self.fiat_action.clone()?;
+    fn mk_fiat_term_proof_by_id(
+        &mut self,
+        table: egglog_bridge::FunctionId,
+        out: Value,
+    ) -> Option<Value> {
+        let sort_name = self
+            .term_output_sorts_by_id
+            .get(table.rep() as usize)?
+            .as_deref()?;
+        let term_proof = self.term_proof_actions.get(sort_name)?;
+        let to_ast = self.to_ast_actions.get(sort_name)?;
+        let fiat = self.fiat_action.as_ref()?;
 
         // Reuse existing term proof if present.
         if let Some(existing) = term_proof.lookup(self.exec_state, &[out]) {
@@ -446,18 +511,29 @@ impl RustRuleContext<'_, '_> {
 
         let ast = to_ast.lookup(self.exec_state, &[out])?;
         let proof = if let (Some(rule), Some(pnil)) =
-            (self.rule_action.clone(), self.pnil_action.clone())
+            (self.rule_action.as_ref(), self.pnil_action.as_ref())
         {
             let name_val = self
                 .exec_state
                 .base_values()
-                .get::<crate::sort::S>(self.rule_name.clone().into());
+                .get::<crate::sort::S>(self.rule_name.to_owned().into());
             let empty = pnil.lookup(self.exec_state, &[])?;
             rule.lookup(self.exec_state, &[name_val, empty, ast, ast])?
         } else {
             fiat.lookup(self.exec_state, &[ast, ast])?
         };
-        term_proof.insert(self.exec_state, [out, proof].into_iter());
+        let term_proof_action = if let Some(action) = self.term_proof_actions_cache.get_mut(sort_name)
+        {
+            action
+        } else {
+            let action = term_proof.clone();
+            self.term_proof_actions_cache
+                .insert(sort_name.to_owned(), action);
+            self.term_proof_actions_cache
+                .get_mut(sort_name)
+                .expect("inserted action should be present")
+        };
+        term_proof_action.insert(self.exec_state, [out, proof].into_iter());
         Some(proof)
     }
 
@@ -475,8 +551,12 @@ impl RustRuleContext<'_, '_> {
     pub fn union_typed(&mut self, sort_name: &str, x: Value, y: Value, premise_proofs: &[Value]) {
         let resolved_sort_name_owned: String = if self.uf_actions.contains_key(sort_name) {
             sort_name.to_owned()
-        } else if let Some(s) = self.term_output_sorts.get(sort_name) {
-            s.clone()
+        } else if let Some(func_id) = self.func_ids.get(sort_name) {
+            self.term_output_sorts_by_id
+                .get(func_id.rep() as usize)
+                .and_then(|x| x.as_ref())
+                .cloned()
+                .unwrap_or_else(|| sort_name.to_owned())
         } else {
             sort_name.to_owned()
         };
@@ -489,17 +569,17 @@ impl RustRuleContext<'_, '_> {
             y,
             self.rule_name
         );
-        let uf = self.uf_actions.get(resolved_sort_name).cloned();
-        let uf_proof = self.uf_proof_actions.get(resolved_sort_name).cloned();
-        let to_ast = self.to_ast_actions.get(resolved_sort_name).cloned();
-        let rule = self.rule_action.clone();
-        let pnil = self.pnil_action.clone();
+        let uf = self.uf_actions.get(resolved_sort_name);
+        let has_uf_proof = self.uf_proof_actions.contains_key(resolved_sort_name);
+        let to_ast = self.to_ast_actions.get(resolved_sort_name);
+        let rule = self.rule_action.as_ref();
+        let pnil = self.pnil_action.as_ref();
         if uf.is_none() {
             log::debug!(
                 "RustRuleContext::union_typed missing UF action for sort={resolved_sort_name}"
             );
         }
-        if uf_proof.is_none() {
+        if !has_uf_proof {
             log::debug!(
                 "RustRuleContext::union_typed missing UFProof action for sort={resolved_sort_name}"
             );
@@ -515,8 +595,8 @@ impl RustRuleContext<'_, '_> {
         if pnil.is_none() {
             log::debug!("RustRuleContext::union_typed missing PNil constructor action");
         }
-        if let (Some(uf), Some(mut uf_proof), Some(to_ast), Some(rule), Some(_pnil)) =
-            (uf, uf_proof, to_ast, rule, pnil)
+        if let (Some(uf), true, Some(to_ast), Some(rule), Some(_pnil)) =
+            (uf, has_uf_proof, to_ast, rule, pnil)
         {
             let (smaller, larger) = if x <= y { (x, y) } else { (y, x) };
             if let (Some(ast_larger), Some(ast_smaller)) = (
@@ -526,13 +606,13 @@ impl RustRuleContext<'_, '_> {
                 let name_val = self
                     .exec_state
                     .base_values()
-                    .get::<crate::sort::S>(self.rule_name.clone().into());
-                let pnil_name = self.pnil_name.clone().unwrap_or_default();
-                let pcons_name = self.pcons_name.clone().unwrap_or_default();
+                    .get::<crate::sort::S>(self.rule_name.to_owned().into());
+                let pnil_name = self.pnil_name.as_ref().map(|s| s.as_str()).unwrap_or_default();
+                let pcons_name = self.pcons_name.as_ref().map(|s| s.as_str()).unwrap_or_default();
                 let debug_proof_list = std::env::var_os("EGGLOG_DEBUG_PROOF_LIST").is_some()
                     && self.rule_name.contains("union_chain");
                 let mut proof_list = match (!pnil_name.is_empty())
-                    .then(|| self.lookup(&pnil_name, &[]))
+                    .then(|| self.lookup(pnil_name, &[]))
                     .flatten()
                 {
                     Some(v) => v,
@@ -554,16 +634,18 @@ impl RustRuleContext<'_, '_> {
                     if pcons_name.is_empty() {
                         panic!(
                             "RustRuleContext::union_typed cannot attach premise proofs because PCons name is missing (rule_name={}, sort={})",
-                            self.rule_name,
-                            resolved_sort_name
+                            self.rule_name, resolved_sort_name
                         )
                     }
                     for prf in premise_proofs.iter().rev().copied() {
                         if debug_proof_list {
-                            eprintln!("DEBUG proof_list cons: head={:?} tail={:?}", prf, proof_list);
+                            eprintln!(
+                                "DEBUG proof_list cons: head={:?} tail={:?}",
+                                prf, proof_list
+                            );
                         }
                         proof_list = self
-                            .lookup(&pcons_name, &[prf, proof_list])
+                            .lookup(pcons_name, &[prf, proof_list])
                             .unwrap_or_else(|| {
                                 panic!(
                                     "RustRuleContext::union_typed failed to construct ProofList via PCons (rule_name={}, sort={})",
@@ -576,11 +658,35 @@ impl RustRuleContext<'_, '_> {
                         }
                     }
                 }
-                if let Some(proof) =
-                    rule.lookup(self.exec_state, &[name_val, proof_list, ast_larger, ast_smaller])
-                {
+                if let Some(proof) = rule.lookup(
+                    self.exec_state,
+                    &[name_val, proof_list, ast_larger, ast_smaller],
+                ) {
                     let _ = uf.lookup(self.exec_state, &[larger, smaller]);
-                    uf_proof.insert(self.exec_state, [larger, smaller, proof].into_iter());
+                    let uf_proof_action = if let Some(action) =
+                        self.uf_proof_actions_cache.get_mut(resolved_sort_name)
+                    {
+                        action
+                    } else {
+                        let action = self
+                            .uf_proof_actions
+                            .get(resolved_sort_name)
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "missing UFProof action for sort: {resolved_sort_name}"
+                                )
+                            })
+                            .clone();
+                        self.uf_proof_actions_cache
+                            .insert(resolved_sort_name.to_owned(), action);
+                        self.uf_proof_actions_cache
+                            .get_mut(resolved_sort_name)
+                            .expect("inserted action should be present")
+                    };
+                    uf_proof_action.insert(
+                        self.exec_state,
+                        [larger, smaller, proof].into_iter(),
+                    );
                     log::debug!(
                         "RustRuleContext::union_typed wrote UFProof({:?},{:?})",
                         larger,
@@ -596,20 +702,72 @@ impl RustRuleContext<'_, '_> {
     /// Insert a row into a table.
     /// For more information, see `egglog_bridge::TableAction::insert`.
     pub fn insert(&mut self, table: &str, row: impl Iterator<Item = Value>) {
-        self.get_table_action(table).insert(self.exec_state, row)
+        let table_id = self.func_id(table);
+        self.insert_id(table_id, row)
+    }
+
+    /// Insert a row into a table by cached backend FunctionId.
+    pub fn insert_id(&mut self, table: egglog_bridge::FunctionId, row: impl Iterator<Item = Value>) {
+        let action = if let Some((_, action)) = self
+            .table_actions_cache_by_id
+            .iter_mut()
+            .find(|(id, _)| *id == table)
+        {
+            action
+        } else {
+            let action = self.get_table_action_by_id(table).clone();
+            self.table_actions_cache_by_id.push((table, action));
+            &mut self
+                .table_actions_cache_by_id
+                .last_mut()
+                .expect("just pushed")
+                .1
+        };
+        action.insert(self.exec_state, row)
     }
 
     /// Remove a row from a table.
     /// For more information, see `egglog_bridge::TableAction::remove`.
     pub fn remove(&mut self, table: &str, key: &[Value]) {
-        self.get_table_action(table).remove(self.exec_state, key)
+        let table_id = self.func_id(table);
+        self.remove_id(table_id, key)
+    }
+
+    /// Remove a row from a table by cached backend FunctionId.
+    pub fn remove_id(&mut self, table: egglog_bridge::FunctionId, key: &[Value]) {
+        let table_actions_by_id = self.table_actions_by_id;
+        let action = table_actions_by_id
+            .get(table.rep() as usize)
+            .and_then(|x| x.as_ref())
+            .unwrap_or_else(|| panic!("missing table action for id: {:?}", table));
+        action.remove(self.exec_state, key)
     }
 
     /// Subsume a row in a table.
     /// For more information, see `egglog_bridge::TableAction::subsume`.
     pub fn subsume(&mut self, table: &str, key: &[Value]) {
-        self.get_table_action(table)
-            .subsume(self.exec_state, key.iter().copied())
+        let table_id = self.func_id(table);
+        self.subsume_id(table_id, key)
+    }
+
+    /// Subsume a row in a table by cached backend FunctionId.
+    pub fn subsume_id(&mut self, table: egglog_bridge::FunctionId, key: &[Value]) {
+        let action = if let Some((_, action)) = self
+            .table_actions_cache_by_id
+            .iter_mut()
+            .find(|(id, _)| *id == table)
+        {
+            action
+        } else {
+            let action = self.get_table_action_by_id(table).clone();
+            self.table_actions_cache_by_id.push((table, action));
+            &mut self
+                .table_actions_cache_by_id
+                .last_mut()
+                .expect("just pushed")
+                .1
+        };
+        action.subsume(self.exec_state, key.iter().copied())
     }
 
     /// Panic.
@@ -628,20 +786,21 @@ struct RustRuleRhs<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> {
     rule_name: String,
     inputs: Vec<ArcSort>,
     union_action: egglog_bridge::UnionAction,
-    table_actions: HashMap<String, egglog_bridge::TableAction>,
-    view_actions: HashMap<String, egglog_bridge::TableAction>,
-    view_proof_actions: HashMap<String, egglog_bridge::TableAction>,
-    term_proof_actions: HashMap<String, egglog_bridge::TableAction>,
-    uf_actions: HashMap<String, egglog_bridge::TableAction>,
-    uf_proof_actions: HashMap<String, egglog_bridge::TableAction>,
-    to_ast_actions: HashMap<String, egglog_bridge::TableAction>,
+    func_ids: Arc<HashMap<String, egglog_bridge::FunctionId>>,
+    table_actions_by_id: Arc<Vec<Option<egglog_bridge::TableAction>>>,
+    view_actions_by_id: Arc<Vec<Option<egglog_bridge::TableAction>>>,
+    view_proof_actions_by_id: Arc<Vec<Option<egglog_bridge::TableAction>>>,
+    term_proof_actions: Arc<HashMap<String, egglog_bridge::TableAction>>,
+    uf_actions: Arc<HashMap<String, egglog_bridge::TableAction>>,
+    uf_proof_actions: Arc<HashMap<String, egglog_bridge::TableAction>>,
+    to_ast_actions: Arc<HashMap<String, egglog_bridge::TableAction>>,
     fiat_action: Option<egglog_bridge::TableAction>,
     rule_action: Option<egglog_bridge::TableAction>,
     pcons_action: Option<egglog_bridge::TableAction>,
     pnil_action: Option<egglog_bridge::TableAction>,
     pcons_name: Option<String>,
     pnil_name: Option<String>,
-    term_output_sorts: HashMap<String, String>,
+    term_output_sorts_by_id: Arc<Vec<Option<String>>>,
     panic_id: ExternalFunctionId,
     func: F,
 }
@@ -665,21 +824,26 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
         let mut context = RustRuleContext {
             exec_state,
             union_action: self.union_action,
-            table_actions: self.table_actions.clone(),
-            view_actions: self.view_actions.clone(),
-            view_proof_actions: self.view_proof_actions.clone(),
-            term_proof_actions: self.term_proof_actions.clone(),
-            uf_actions: self.uf_actions.clone(),
-            uf_proof_actions: self.uf_proof_actions.clone(),
-            to_ast_actions: self.to_ast_actions.clone(),
-            fiat_action: self.fiat_action.clone(),
-            rule_action: self.rule_action.clone(),
-            pcons_action: self.pcons_action.clone(),
-            pnil_action: self.pnil_action.clone(),
-            pcons_name: self.pcons_name.clone(),
-            pnil_name: self.pnil_name.clone(),
-            rule_name: self.rule_name.clone(),
-            term_output_sorts: self.term_output_sorts.clone(),
+            func_ids: self.func_ids.as_ref(),
+            table_actions_by_id: self.table_actions_by_id.as_slice(),
+            table_actions_cache_by_id: Vec::new(),
+            view_actions_by_id: self.view_actions_by_id.as_slice(),
+            view_proof_actions_by_id: self.view_proof_actions_by_id.as_slice(),
+            view_proof_actions_cache_by_id: Vec::new(),
+            term_proof_actions: self.term_proof_actions.as_ref(),
+            term_proof_actions_cache: Default::default(),
+            uf_actions: self.uf_actions.as_ref(),
+            uf_proof_actions: self.uf_proof_actions.as_ref(),
+            uf_proof_actions_cache: Default::default(),
+            to_ast_actions: self.to_ast_actions.as_ref(),
+            fiat_action: &self.fiat_action,
+            rule_action: &self.rule_action,
+            pcons_action: &self.pcons_action,
+            pnil_action: &self.pnil_action,
+            pnil_name: &self.pnil_name,
+            pcons_name: &self.pcons_name,
+            rule_name: self.rule_name.as_str(),
+            term_output_sorts_by_id: self.term_output_sorts_by_id.as_slice(),
             panic_id: self.panic_id,
         };
         (self.func)(&mut context, values)?;
@@ -783,16 +947,17 @@ pub fn rust_rule(
     // This is the actual rule name that will appear in the proof-check program.
     // Any `Rule` proof terms we synthesize must use this exact string.
     let fresh_rule_name = egraph.parser.symbol_gen.fresh(rule_name);
-    let table_actions: HashMap<String, egglog_bridge::TableAction> = egraph
-        .functions
-        .iter()
-        .map(|(k, v)| {
-            (
-                k.clone(),
-                egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
-            )
-        })
-        .collect();
+    let mut func_ids: HashMap<String, egglog_bridge::FunctionId> = Default::default();
+    func_ids.reserve(egraph.functions.len());
+    let mut table_actions_by_id: Vec<Option<egglog_bridge::TableAction>> = Vec::new();
+    for (k, v) in egraph.functions.iter() {
+        func_ids.insert(k.clone(), v.backend_id);
+        let idx = v.backend_id.rep() as usize;
+        if table_actions_by_id.len() <= idx {
+            table_actions_by_id.resize_with(idx + 1, || None);
+        }
+        table_actions_by_id[idx] = Some(egglog_bridge::TableAction::new(&egraph.backend, v.backend_id));
+    }
 
     // term constructor name -> view table action
     let view_actions: HashMap<String, egglog_bridge::TableAction> = egraph
@@ -808,34 +973,55 @@ pub fn rust_rule(
         })
         .collect();
 
+    let mut view_actions_by_id: Vec<Option<egglog_bridge::TableAction>> =
+        vec![None; table_actions_by_id.len()];
+    let mut term_output_sorts_by_id: Vec<Option<String>> = vec![None; table_actions_by_id.len()];
+    for (term_name, view_action) in view_actions.iter() {
+        let Some(term_id) = func_ids.get(term_name).copied() else {
+            continue;
+        };
+        let idx = term_id.rep() as usize;
+        view_actions_by_id[idx] = Some(view_action.clone());
+        if let Some(func) = egraph.functions.get(term_name) {
+            term_output_sorts_by_id[idx] = Some(func.decl.schema.output.clone());
+        }
+    }
+
     // Proof wiring (only used when proofs mode is enabled).
     //
     // Use the proof-encoding name cache rather than substring heuristics, otherwise
     // rulesets that introduce other `*ViewProof` functions (e.g. view-witness sorts)
     // can confuse the discovery and silently drop premise lists (`PCons`).
-    let (fiat_action, rule_action, pcons_action, pnil_action, proof_sort) = if egraph.are_proofs_enabled() {
-        let names = &egraph.proof_state.proof_names;
-        let proof_sort = Some(names.proof_datatype.clone());
-        let fiat_action = egraph
-            .functions
-            .get(&names.fiat_constructor)
-            .map(|v| egglog_bridge::TableAction::new(&egraph.backend, v.backend_id));
-        let rule_action = egraph
-            .functions
-            .get(&names.rule_constructor)
-            .map(|v| egglog_bridge::TableAction::new(&egraph.backend, v.backend_id));
-        let pcons_action = egraph
-            .functions
-            .get(&names.pcons)
-            .map(|v| egglog_bridge::TableAction::new(&egraph.backend, v.backend_id));
-        let pnil_action = egraph
-            .functions
-            .get(&names.pnil)
-            .map(|v| egglog_bridge::TableAction::new(&egraph.backend, v.backend_id));
-        (fiat_action, rule_action, pcons_action, pnil_action, proof_sort)
-    } else {
-        (None, None, None, None, None)
-    };
+    let (fiat_action, rule_action, pcons_action, pnil_action, proof_sort) =
+        if egraph.are_proofs_enabled() {
+            let names = &egraph.proof_state.proof_names;
+            let proof_sort = Some(names.proof_datatype.clone());
+            let fiat_action = egraph
+                .functions
+                .get(&names.fiat_constructor)
+                .map(|v| egglog_bridge::TableAction::new(&egraph.backend, v.backend_id));
+            let rule_action = egraph
+                .functions
+                .get(&names.rule_constructor)
+                .map(|v| egglog_bridge::TableAction::new(&egraph.backend, v.backend_id));
+            let pcons_action = egraph
+                .functions
+                .get(&names.pcons)
+                .map(|v| egglog_bridge::TableAction::new(&egraph.backend, v.backend_id));
+            let pnil_action = egraph
+                .functions
+                .get(&names.pnil)
+                .map(|v| egglog_bridge::TableAction::new(&egraph.backend, v.backend_id));
+            (
+                fiat_action,
+                rule_action,
+                pcons_action,
+                pnil_action,
+                proof_sort,
+            )
+        } else {
+            (None, None, None, None, None)
+        };
 
     let proof_list_sort = if egraph.are_proofs_enabled() {
         Some(egraph.proof_state.proof_names.proof_list_sort.clone())
@@ -907,8 +1093,7 @@ pub fn rust_rule(
                 .filter_map(|sort_name| {
                     let uf_proof_name = egraph.proof_uf_proof_table_name(sort_name).ok()?;
                     let func = egraph.functions.get(uf_proof_name)?;
-                    if func.decl.schema.input.as_slice()
-                        != [sort_name.as_str(), sort_name.as_str()]
+                    if func.decl.schema.input.as_slice() != [sort_name.as_str(), sort_name.as_str()]
                         || &func.decl.schema.output != proof_sort
                     {
                         return None;
@@ -932,8 +1117,7 @@ pub fn rust_rule(
                 .filter_map(|sort_name| {
                     let uf_name = egraph.proof_uf_table_name(sort_name).ok()?;
                     let func = egraph.functions.get(uf_name)?;
-                    if func.decl.schema.input.as_slice()
-                        != [sort_name.as_str(), sort_name.as_str()]
+                    if func.decl.schema.input.as_slice() != [sort_name.as_str(), sort_name.as_str()]
                     {
                         return None;
                     }
@@ -946,32 +1130,26 @@ pub fn rust_rule(
         })
         .unwrap_or_default();
 
-    let view_proof_actions: HashMap<String, egglog_bridge::TableAction> = proof_sort
-        .as_ref()
-        .map(|proof_sort| {
-            view_actions
-                .keys()
-                .filter_map(|term_name| {
-                    let needle = format!("{term_name}ViewProof");
-                    egraph.functions.iter().find_map(|(k, v)| {
-                        (k.contains(&needle)
-                            && v.decl.schema.output == *proof_sort
-                            && v.decl.schema.input.len() == (egraph
-                                .functions
-                                .get(term_name)
-                                .map(|f| f.decl.schema.input.len() + 1)
-                                .unwrap_or(0)))
-                            .then(|| {
-                                (
-                                    term_name.clone(),
-                                    egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
-                                )
-                            })
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let view_proof_actions_by_id: Vec<Option<egglog_bridge::TableAction>> =
+        if proof_sort.is_some() {
+            let mut out: Vec<Option<egglog_bridge::TableAction>> = vec![None; table_actions_by_id.len()];
+            for term_name in view_actions.keys() {
+                let Some(term_id) = func_ids.get(term_name).copied() else {
+                    continue;
+                };
+                let Ok(view_proof_name) = egraph.proof_view_proof_name(term_name) else {
+                    continue;
+                };
+                let Some(func) = egraph.functions.get(view_proof_name) else {
+                    continue;
+                };
+                out[term_id.rep() as usize] =
+                    Some(egglog_bridge::TableAction::new(&egraph.backend, func.backend_id));
+            }
+            out
+        } else {
+            vec![None; table_actions_by_id.len()]
+        };
 
     egraph.add_primitive_with_validator(
         RustRuleRhs {
@@ -979,13 +1157,14 @@ pub fn rust_rule(
             rule_name: fresh_rule_name.clone(),
             inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
             union_action: egglog_bridge::UnionAction::new(&egraph.backend),
-            table_actions,
-            view_actions,
-            view_proof_actions,
-            term_proof_actions,
-            uf_actions,
-            uf_proof_actions,
-            to_ast_actions,
+            func_ids: Arc::new(func_ids),
+            table_actions_by_id: Arc::new(table_actions_by_id),
+            view_actions_by_id: Arc::new(view_actions_by_id),
+            view_proof_actions_by_id: Arc::new(view_proof_actions_by_id),
+            term_proof_actions: Arc::new(term_proof_actions),
+            uf_actions: Arc::new(uf_actions),
+            uf_proof_actions: Arc::new(uf_proof_actions),
+            to_ast_actions: Arc::new(to_ast_actions),
             fiat_action,
             rule_action,
             pcons_action,
@@ -996,7 +1175,7 @@ pub fn rust_rule(
             pnil_name: egraph
                 .are_proofs_enabled()
                 .then(|| egraph.proof_state.proof_names.pnil.clone()),
-            term_output_sorts,
+            term_output_sorts_by_id: Arc::new(term_output_sorts_by_id),
             panic_id,
             func,
         },
