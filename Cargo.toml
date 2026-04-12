@@ -103,6 +103,10 @@ harness = false
 name = "nightly_benchmarking"
 harness = false
 
+[[bench]]
+name = "rust_api_math_microbenchmark"
+harness = false
+
 [[test]]
 name = "files"
 harness = false
