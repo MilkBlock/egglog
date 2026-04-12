@@ -19,24 +19,18 @@ use num_rational::Rational64;
 use once_cell::sync::Lazy;
 
 use crate::{
-    ColumnTy, DefaultVal, EGraph, FunctionConfig, FunctionId, MergeFn, ProofStore, QueryEntry,
-    add_expressions, define_rule,
+    ColumnTy, DefaultVal, EGraph, FunctionConfig, FunctionId, MergeFn, QueryEntry, add_expressions,
+    define_rule,
 };
 
-/// Run a simple associativity/commutativity test. In addition to testing that the rules properly
-/// reassociate a nested sum, this test checks a proof of an arbitrary term in the database if
-/// `tracing` is true.
+/// Run a simple associativity/commutativity test.
 ///
 /// The `can_subsume` argument is only used to enable subsumption on the underlying tables created
 /// during this test, and exercise the different column handling caused by enabling subsumption.
 /// Subsumption itself is not used.
-fn ac_test(tracing: bool, can_subsume: bool) {
+fn ac_test(can_subsume: bool) {
     const N: usize = 5;
-    let mut egraph = if tracing {
-        EGraph::with_tracing()
-    } else {
-        EGraph::default()
-    };
+    let mut egraph = EGraph::default();
     let int_base = egraph.base_values_mut().register_type::<i64>();
     let num_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
@@ -71,7 +65,7 @@ fn ac_test(tracing: bool, can_subsume: bool) {
     //  Add 0 .. N to the database.
     for i in 0..N {
         let i = egraph.base_values_mut().get(i as i64);
-        ids.push(egraph.add_term(num_table, &[i], "base number"));
+        ids.push(egraph.add_term(num_table, &[i]));
     }
 
     // construct (0 + ... + N), left-associated, and (N + ... + 0),
@@ -80,13 +74,13 @@ fn ac_test(tracing: bool, can_subsume: bool) {
     let (left_root, right_root) = {
         let mut prev = ids[0];
         for num in &ids[1..] {
-            let id = egraph.add_term(add_table, &[*num, prev], "add_left");
+            let id = egraph.add_term(add_table, &[*num, prev]);
             prev = id;
         }
         let left_root = prev;
         let mut prev = *ids.last().unwrap();
         for num in ids[0..(N - 1)].iter() {
-            let id = egraph.add_term(add_table, &[prev, *num], "add_right");
+            let id = egraph.add_term(add_table, &[prev, *num]);
             prev = id;
         }
         let right_root = prev;
@@ -97,35 +91,16 @@ fn ac_test(tracing: bool, can_subsume: bool) {
     let canon_left = egraph.get_canon_in_uf(left_root);
     let canon_right = egraph.get_canon_in_uf(right_root);
     assert_eq!(canon_left, canon_right, "failed to reassociate!");
-    if tracing {
-        let mut row = Vec::new();
-        egraph.for_each(add_table, |func_row| {
-            assert!(!func_row.subsumed);
-            row.clear();
-            row.extend_from_slice(func_row.vals);
-        });
-
-        let term_id = egraph.lookup_id(add_table, &row[0..row.len() - 1]).unwrap();
-        let mut proof_store = ProofStore::default();
-        let _term_explanation = egraph.explain_term(term_id, &mut proof_store).unwrap();
-        let _eq_explanation = egraph
-            .explain_terms_equal(left_root, right_root, &mut proof_store)
-            .unwrap();
-        // to print:
-        // proof_store
-        //     .print_eq_proof(_eq_explanation, &mut std::io::stderr())
-        //     .unwrap();
-    }
 }
 
 #[test]
 fn ac() {
-    ac_test(false, false);
+    ac_test(false);
 }
 
 #[test]
 fn ac_subsume() {
-    ac_test(false, true);
+    ac_test(true);
 }
 
 #[test]
@@ -444,7 +419,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
     // Print out some debugging info. This gets hidden by default for passing tests.
     debug!("diff_size={:?} vs. 338", egraph.table_size(diff));
     debug!("integral_size={:?} vs. 782 ", egraph.table_size(integral));
-    debug!("sub_size={:?} vs 438", egraph.table_size(sub));
+    debug!("sub_size={:?} vs 483", egraph.table_size(sub));
     debug!("div_size={:?} vs. 3", egraph.table_size(div));
     debug!("pow_size={:?} vs 2", egraph.table_size(pow));
     debug!("ln_size={:?} vs 1", egraph.table_size(ln));
@@ -456,36 +431,19 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
     debug!("add_size={:?} vs 2977", egraph.table_size(add));
     debug!("mul_size={:?} vs 3516", egraph.table_size(mul));
 
-    if !egraph.tracing {
-        // NB: we still don't understand why these counts don't match when
-        // proofs are enabled. We need better debugging to make this viable
-        // though.
-        assert_eq!(338, egraph.table_size(diff));
-        assert_eq!(782, egraph.table_size(integral));
-        assert_eq!(483, egraph.table_size(sub));
-        assert_eq!(3, egraph.table_size(div));
-        assert_eq!(2, egraph.table_size(pow));
-        assert_eq!(1, egraph.table_size(ln));
-        assert_eq!(1, egraph.table_size(sqrt));
-        assert_eq!(1, egraph.table_size(sin));
-        assert_eq!(1, egraph.table_size(cos));
-        assert_eq!(5, egraph.table_size(rat));
-        assert_eq!(3, egraph.table_size(var));
-        assert_eq!(2977, egraph.table_size(add));
-        assert_eq!(3516, egraph.table_size(mul));
-    }
-
-    if egraph.tracing {
-        let mut row = Vec::new();
-        egraph.for_each(mul, |func_row| {
-            assert!(!func_row.subsumed);
-            row.clear();
-            row.extend_from_slice(func_row.vals);
-        });
-        let term_id = egraph.lookup_id(mul, &row[0..row.len() - 1]).unwrap();
-        let mut proof_store = ProofStore::default();
-        let _explain = egraph.explain_term(term_id, &mut proof_store).unwrap();
-    }
+    assert_eq!(338, egraph.table_size(diff));
+    assert_eq!(782, egraph.table_size(integral));
+    assert_eq!(483, egraph.table_size(sub));
+    assert_eq!(3, egraph.table_size(div));
+    assert_eq!(2, egraph.table_size(pow));
+    assert_eq!(1, egraph.table_size(ln));
+    assert_eq!(1, egraph.table_size(sqrt));
+    assert_eq!(1, egraph.table_size(sin));
+    assert_eq!(1, egraph.table_size(cos));
+    assert_eq!(5, egraph.table_size(rat));
+    assert_eq!(3, egraph.table_size(var));
+    assert_eq!(2977, egraph.table_size(add));
+    assert_eq!(3516, egraph.table_size(mul));
 }
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
@@ -754,6 +712,104 @@ fn basic_container() {
     for _ in 0..8 {
         container_test()
     }
+}
+
+fn run_query_prim_container_match_case(seminaive: bool, seed_canonical: bool) -> bool {
+    let mut egraph = EGraph::default();
+    let k_table = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "k".into(),
+        can_subsume: false,
+    });
+    let w_table = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "w".into(),
+        can_subsume: false,
+    });
+    let l_table = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "l".into(),
+        can_subsume: false,
+    });
+
+    let b = egraph.fresh_id();
+    let k_b = egraph.add_term(k_table, &[b]);
+    if seed_canonical {
+        let _ = egraph.get_container_value(VecContainer(vec![k_b]));
+    }
+    let w_k_b = egraph.add_term(w_table, &[k_b]);
+    let vec = egraph.get_container_value(VecContainer(vec![w_k_b]));
+    let l_id = egraph.add_term(l_table, &[vec]);
+
+    let raw_k_table = egraph.funcs[k_table].table;
+    let match_singleton_k =
+        egraph.register_external_func(Box::new(make_external_func(move |state, vals| {
+            let [vec_id] = vals else {
+                panic!("match_singleton_k expected 1 arg, got {vals:?}");
+            };
+            let vec = state.container_values().get_val::<VecContainer>(*vec_id)?;
+            let [entry] = vec.0.as_slice() else {
+                return None;
+            };
+            let table = state.get_table(raw_k_table);
+            let rows = table.scan(table.all().as_ref());
+            for (_, row) in rows.non_stale() {
+                if row[1] == *entry {
+                    return Some(row[0]);
+                }
+            }
+            None
+        })));
+
+    let w_rewrite = {
+        let mut rb = egraph.new_rule("w_rewrite", seminaive);
+        let x: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        let w_id: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        rb.query_table(w_table, &[x.clone(), w_id.clone()], Some(false))
+            .unwrap();
+        rb.union(w_id, x);
+        rb.build()
+    };
+
+    let l_rewrite = {
+        let mut rb = egraph.new_rule("l_rewrite", seminaive);
+        let vec: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        let l_id_entry: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        let x: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        rb.query_table(l_table, &[vec.clone(), l_id_entry.clone()], Some(false))
+            .unwrap();
+        rb.query_prim(match_singleton_k, &[vec, x.clone()], ColumnTy::Id)
+            .unwrap();
+        rb.union(l_id_entry, x);
+        rb.build()
+    };
+
+    let mut saturated = false;
+    for _ in 0..8 {
+        saturated = !egraph.run_rules(&[w_rewrite, l_rewrite]).unwrap().changed();
+        if saturated {
+            break;
+        }
+    }
+    assert!(saturated, "failed to saturate after 8 iterations");
+    egraph.get_canon_in_uf(l_id) == egraph.get_canon_in_uf(b)
+}
+
+#[test]
+fn seminaive_query_prim_rechecks_after_rebuild() {
+    assert!(run_query_prim_container_match_case(true, false));
+    assert!(run_query_prim_container_match_case(false, false));
+}
+
+#[test]
+fn seminaive_query_prim_rechecks_after_preseeded_container_rebuild() {
+    assert!(run_query_prim_container_match_case(true, true));
 }
 
 #[test]
@@ -1083,11 +1139,14 @@ fn constrain_prims_simple() {
         can_subsume: false,
     });
 
+    let query_prim_invocations = Arc::new(AtomicUsize::new(0));
+    let query_prim_invocations_clone = query_prim_invocations.clone();
     let is_even = egraph.register_external_func(Box::new(core_relations::make_external_func(
-        |state, vals| -> Option<Value> {
+        move |state, vals| -> Option<Value> {
             let [a] = vals else {
                 return None;
             };
+            query_prim_invocations_clone.fetch_add(1, Ordering::Relaxed);
             let a_val = state.base_values().unwrap::<i64>(*a);
             let result: bool = a_val % 2 == 0;
             Some(state.base_values().get(result))
@@ -1140,6 +1199,13 @@ fn constrain_prims_simple() {
     let f = get_entries(&egraph, f_table);
     assert_eq!(f.len(), 3);
     egraph.run_rules(&[copy_to_g]).unwrap();
+    let invocations_after_first = query_prim_invocations.load(Ordering::Relaxed);
+    assert!(invocations_after_first > 0);
+    assert!(!egraph.run_rules(&[copy_to_g]).unwrap().changed());
+    assert_eq!(
+        query_prim_invocations.load(Ordering::Relaxed),
+        invocations_after_first
+    );
     let g = get_entries(&egraph, g_table);
     assert_eq!(g.len(), 1);
     assert_eq!(g[0], f[1])

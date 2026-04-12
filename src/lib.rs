@@ -37,8 +37,9 @@ pub use ast::{ResolvedExpr, ResolvedFact, ResolvedVar};
 #[cfg(feature = "bin")]
 pub use cli::*;
 use constraint::{Constraint, Problem, SimpleTypeConstraint, TypeConstraint};
+use core::CoreActionContext;
+use core::ResolvedAtomTerm;
 pub use core::{Atom, AtomTerm};
-use core::{CoreActionContext, ResolvedAtomTerm};
 pub use core::{ResolvedCall, SpecializedPrimitive};
 pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
 use core_relations::{ExternalFunctionId, make_external_func};
@@ -50,7 +51,7 @@ use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
 pub use egglog_bridge::FunctionRow;
-use egglog_bridge::{ColumnTy, QueryEntry};
+use egglog_bridge::{ColumnTy, QueryEntry, UnionAction};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{ReportLevel, RunReport};
@@ -299,6 +300,11 @@ impl Function {
     pub fn can_subsume(&self) -> bool {
         self.can_subsume
     }
+
+    /// Whether this is a let binding
+    pub fn is_let_binding(&self) -> bool {
+        self.decl.internal_let
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -350,7 +356,6 @@ impl Default for EGraph {
             proof_state,
             proof_check_program: vec![],
         };
-
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
         add_base_sort(&mut eg, StringSort, span!()).unwrap();
         add_base_sort(&mut eg, BoolSort, span!()).unwrap();
@@ -379,6 +384,20 @@ impl Default for EGraph {
                 (a != b).then_some(())
             },
             neq_validator
+        );
+
+        add_primitive_with_validator!(
+            &mut eg,
+            "bool-!=" = |a: #, b: #| -> bool {
+                (a != b)
+            },
+            |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+                if args.len() == 2 {
+                    Some(termdag.lit(Literal::Bool(args[0] != args[1])))
+                } else {
+                    None
+                }
+            }
         );
 
         add_primitive!(&mut eg, "value-eq" = |a: #, b: #| -?> () {
@@ -458,6 +477,41 @@ impl EGraph {
     pub fn with_proof_testing(mut self) -> Self {
         self.proof_state.proof_testing = true;
         self
+    }
+
+    /// Set the number of threads used for parallel operations.
+    ///
+    /// This is a helper that simply configures the global rayon thread pool. It can only be called
+    /// once per process; subsequent calls will be ignored.
+    ///
+    /// # Panics
+    ///
+    /// Panics on wasm if `num_threads > 1`.
+    pub fn set_num_threads(num_threads: usize) {
+        #[cfg(target_family = "wasm")]
+        if num_threads > 1 {
+            panic!("cannot use more than 1 thread on wasm");
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            // This will fail silently if the global pool has already been configured.
+            let err = rayon::ThreadPoolBuilder::new()
+                .num_threads(num_threads)
+                .build_global();
+            // print log if successful
+            if matches!(err, Ok(())) {
+                log::info!("Initialize global thread pool with  {num_threads} threads");
+            } else {
+                log::warn!(
+                    "Failed to initialize global thread pool with {num_threads} threads. This may be because the thread pool was already initialized with a different number of threads. Error: {err:?}"
+                );
+            }
+        }
+    }
+
+    /// Return the number of threads in the rayon thread pool.
+    pub fn num_threads(&self) -> usize {
+        rayon::current_num_threads()
     }
 
     /// Add a user-defined command to the e-graph
@@ -975,6 +1029,28 @@ impl EGraph {
         }
     }
 
+    /// Get the list of all functions in the e-graph.
+    pub fn get_function_names(&self) -> Vec<String> {
+        self.functions.keys().cloned().collect()
+    }
+
+    /// Read the contents of the given function.
+    /// The callback f is called with each row and its subsumption status.
+    ///
+    /// Raises an error if the function does not exist.
+    pub fn function_for_each(
+        &self,
+        func_name: &str,
+        f: impl FnMut(FunctionRow<'_>),
+    ) -> Result<(), Error> {
+        let func = self
+            .functions
+            .get(func_name)
+            .ok_or_else(|| TypeError::UnboundFunction(func_name.to_string(), span!()))?;
+        self.backend.for_each(func.backend_id, f);
+        Ok(())
+    }
+
     /// Evaluates an expression, returns the sort of the expression and the evaluation result.
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let span = expr.span();
@@ -1451,7 +1527,7 @@ impl EGraph {
 
         let num_facts = parsed_contents.len();
 
-        let mut table_action = egglog_bridge::TableAction::new(&self.backend, func.backend_id);
+        let table_action = egglog_bridge::TableAction::new(&self.backend, func.backend_id);
 
         if function_type.subtype != FunctionSubtype::Constructor {
             self.backend.with_execution_state(|es| {
@@ -1648,7 +1724,6 @@ impl EGraph {
     ) -> Result<Vec<ResolvedCommand>, Error> {
         let parsed = self.parser.get_program_from_string(filename, input)?;
         let res = self.process_program_internal(parsed, false)?;
-
         Ok(res.resolved.into_iter().map(|c| c.to_command()).collect())
     }
 
@@ -1798,6 +1873,11 @@ impl EGraph {
     pub fn get_canonical_value(&self, val: Value, sort: &ArcSort) -> Value {
         self.backend
             .get_canon_repr(val, sort.column_ty(&self.backend))
+    }
+
+    /// Create a new union action that can be used to union two values.
+    pub fn new_union_action(&self) -> egglog_bridge::UnionAction {
+        UnionAction::new(&self.backend)
     }
 }
 

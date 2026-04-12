@@ -25,7 +25,7 @@ mod tests;
 pub use action::{ExecutionState, MergeVal, QueryEntry, WriteVal};
 pub use base_values::{BaseValue, BaseValueId, BaseValuePrinter, BaseValues, Boxed};
 pub use common::Value;
-pub use containers::{ContainerValue, ContainerValueId, ContainerValues};
+pub use containers::{ContainerRebuildSummary, ContainerValue, ContainerValueId, ContainerValues};
 pub use free_join::{
     AtomId, CounterId, Database, ExternalFunction, ExternalFunctionId, TableId, Variable,
     make_external_func, plan::PlanStrategy,
@@ -42,7 +42,7 @@ pub use table_spec::{
     ColumnId, Constraint, MutationBuffer, Offset, Rebuilder, Row, Table, TableChange, TableSpec,
     TableVersion, WrappedTable,
 };
-pub use uf::{DisplacedTable, DisplacedTableWithProvenance, ProofReason, ProofStep};
+pub use uf::DisplacedTable;
 
 use egglog_numeric_id as numeric_id;
 use egglog_union_find as union_find;
